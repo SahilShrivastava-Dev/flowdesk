@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import TaskTable from '../components/TaskTable.jsx';
-import PageHeader from '../components/PageHeader.jsx';
 import { useApp } from '../context/AppContext.jsx';
 import { directReports } from '../data/mockData.js';
 import { Clock, CheckCircle2, AlertCircle, ListTodo, Activity } from 'lucide-react';

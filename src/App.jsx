@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext.jsx';
 import { Home, ListTodo, Users, BarChart3, Plus, Bell, Search, Sparkles, Sun, Moon } from 'lucide-react';
-import { RadialBarChart, RadialBar, Legend, Tooltip, ResponsiveContainer, PolarAngleAxis } from 'recharts';
+import { RadialBarChart, RadialBar, Tooltip, ResponsiveContainer, PolarAngleAxis } from 'recharts';
 
 import TasksView from './views/TasksView.jsx';
 import TeamView from './views/TeamView.jsx';

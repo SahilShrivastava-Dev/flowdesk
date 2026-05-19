@@ -1,5 +1,4 @@
 import React from 'react';
-import { useApp } from '../context/AppContext.jsx';
 import { ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Scatter } from 'recharts';
 import { Layers, Zap } from 'lucide-react';
 
@@ -14,8 +13,6 @@ const complexData = [
 ];
 
 export default function AnalyticsView() {
-  const { tasks } = useApp();
-
   return (
     <div className="space-y-12 animate-fade-in relative z-10 pb-20">
       

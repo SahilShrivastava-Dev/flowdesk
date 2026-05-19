@@ -140,7 +140,10 @@ body {
 .quick-actions {
     display: flex;
     align-items: center;
-    gap: -8px;
+}
+
+.action-btn + .action-btn {
+    margin-left: -8px;
 }
 
 .action-btn {

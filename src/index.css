@@ -25,8 +25,9 @@ body {
     radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.08) 0%, transparent 50%);
 }
 
-/* Hide scrollbars for an app-like feel */
-::-webkit-scrollbar { width: 0px; height: 0px; }
+/* Opt-in scrollbar hiding — apply .no-scrollbar to specific containers that need it */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { width: 0; height: 0; }
 
 @layer components {
   /* Eclipse Design System - Light & Dark */
@@ -59,6 +60,24 @@ body {
   .btn-ghost { @apply eclipse-btn-secondary border-transparent bg-transparent; }
   .btn-soft { @apply eclipse-btn-secondary; }
   .input { @apply eclipse-input; }
+
+  /* Legacy utility classes still used by TaskTable, TaskDetailsModal, StatusBadge, and card components */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+  .num {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .table-head {
+    @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 border-b border-slate-200 dark:border-white/10;
+  }
+  .table-cell {
+    @apply px-3 py-3 align-middle text-sm text-slate-700 dark:text-ink-200 border-b border-slate-100 dark:border-white/[0.04];
+  }
+  .row-hover {
+    @apply transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03];
+  }
 }
 
 /* Animations */
