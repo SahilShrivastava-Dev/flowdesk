@@ -16,8 +16,13 @@ export const users = [
   { id: 'U107', name: 'Imran Sheikh',    role: 'Employee', reportingTo: 'U012', email: 'imran@flowdesk.io',     avatar: 'IS', color: 'from-cyan-500 to-blue-600' },
 ];
 
-export const findUser = (id) => users.find((u) => u.id === id);
-export const directReports = (managerId) => users.filter((u) => u.reportingTo === managerId);
+// Runtime override — AppContext calls this when API users are loaded
+let _runtimeUsers = users;
+export function setRuntimeUsers(u) { _runtimeUsers = u; }
+
+export const findUser = (id) => _runtimeUsers.find((u) => u.id === id);
+export const directReports = (managerId) =>
+  _runtimeUsers.filter((u) => (u.reportingTo ?? u.reportingToId) === managerId);
 
 // ----------------------------- Date helpers -----------------------------
 const today = new Date('2026-05-03T09:00:00');

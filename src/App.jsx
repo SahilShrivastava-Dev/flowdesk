@@ -1,192 +1,473 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AppProvider, useApp } from './context/AppContext.jsx';
-import { Home, ListTodo, Users, BarChart3, Plus, Bell, Search, Sparkles, Sun, Moon } from 'lucide-react';
-import { RadialBarChart, RadialBar, Tooltip, ResponsiveContainer, PolarAngleAxis } from 'recharts';
+import { isLoggedIn, getSavedUser, clearSession } from './lib/auth.js';
+import LoginView from './views/LoginView.jsx';
+import {
+  Search, Bell, Moon, Sun, ChevronDown, Plus, LogOut, X,
+} from 'lucide-react';
 
-import TasksView from './views/TasksView.jsx';
-import TeamView from './views/TeamView.jsx';
-import ApprovalsView from './views/ApprovalsView.jsx';
-import AnalyticsView from './views/AnalyticsView.jsx';
-import TaskDetailsModal from './components/TaskDetailsModal.jsx';
-import CreateTaskModal from './components/CreateTaskModal.jsx';
+import AdminDashboard    from './views/AdminDashboard.jsx';
+import ManagerDashboard  from './views/ManagerDashboard.jsx';
+import EmployeeDashboard from './views/EmployeeDashboard.jsx';
+import TasksView         from './views/TasksView.jsx';
+import AnalyticsView     from './views/AnalyticsView.jsx';
+import TeamView          from './views/TeamView.jsx';
+import EscalationsView   from './views/EscalationsView.jsx';
+import ApprovalsView     from './views/ApprovalsView.jsx';
+import WhatsAppHub       from './views/WhatsAppHub.jsx';
+import TaskDetailsModal  from './components/TaskDetailsModal.jsx';
+import CreateTaskModal   from './components/CreateTaskModal.jsx';
 
-// Dribbble-style Massive Radial Data
-const radialData = [
-  { name: 'Pending', count: 45, fill: '#f43f5e' },
-  { name: 'In Progress', count: 65, fill: '#8b5cf6' },
-  { name: 'Review', count: 85, fill: '#3b82f6' },
-  { name: 'Completed', count: 120, fill: '#10b981' },
-];
+// ── Role-based navigation config ─────────────────────────────────────────────
+const NAV_BY_ROLE = {
+  Admin: [
+    { id: 'Dashboard',   label: 'Dashboard'   },
+    { id: 'Tasks',       label: 'Tasks'        },
+    { id: 'Analytic',    label: 'Analytic'     },
+    { id: 'Team',        label: 'Team'         },
+    { id: 'Escalations', label: 'Escalations'  },
+    { id: 'Tracker',     label: 'Tracker'      },
+  ],
+  Manager: [
+    { id: 'Dashboard', label: 'Dashboard' },
+    { id: 'Tasks',     label: 'Tasks'     },
+    { id: 'Approvals', label: 'Approvals' },
+    { id: 'Team',      label: 'Team'      },
+    { id: 'Tracker',   label: 'Tracker'   },
+  ],
+  Employee: [
+    { id: 'MyDay',    label: 'My Day'    },
+    { id: 'MyTasks',  label: 'My Tasks'  },
+    { id: 'Tracker',  label: 'Tracker'   },
+  ],
+};
 
-function EclipseOverview({ onOpenTask }) {
-  const { tasks, activeUser } = useApp();
-  const priorityTasks = tasks.filter(t => t.status !== 'Done').slice(0, 4);
+const DEFAULT_TAB = { Admin: 'Dashboard', Manager: 'Dashboard', Employee: 'MyDay' };
+const ROLES = ['Admin', 'Manager', 'Employee'];
+
+// ── Search overlay ────────────────────────────────────────────────────────────
+function SearchOverlay({ onClose }) {
+  const { tasks, setSearch } = useApp();
+  const [q, setQ] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // close on Escape
+  useEffect(() => {
+    const fn = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  const results = q
+    ? tasks.filter((t) =>
+        t.title.toLowerCase().includes(q.toLowerCase()) ||
+        t.id.toLowerCase().includes(q.toLowerCase())
+      ).slice(0, 6)
+    : [];
 
   return (
-    <div className="h-full flex flex-col lg:flex-row gap-8 animate-fade-in p-8">
-      
-      {/* Left Column: Greeting & Priority Flow */}
-      <div className="flex-1 flex flex-col justify-center">
-        <div className="mb-10">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 text-xs font-bold mb-6">
-            <Sparkles size={14} /> System Optimal
-          </div>
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight leading-tight mb-4 text-slate-900 dark:text-white">
-            Good Morning,<br/>{activeUser?.name?.split(' ')[0]}.
-          </h1>
-          <p className="text-lg text-slate-500 dark:text-white/50 font-medium max-w-md">
-            You have <strong className="text-slate-800 dark:text-white">{tasks.filter(t=>t.status==='Pending').length} pending actions</strong> requiring your attention.
-          </p>
+    <div
+      className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-start justify-center pt-24 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="fd-card w-full max-w-lg shadow-2xl animate-pop-in overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-[#F3F4F6]">
+          <Search className="h-4 w-4 text-[#9CA3AF] shrink-0" />
+          <input
+            ref={inputRef}
+            className="flex-1 text-sm bg-transparent outline-none text-[#111827] placeholder:text-[#9CA3AF]"
+            placeholder="Search tasks, IDs, people…"
+            value={q}
+            onChange={(e) => { setQ(e.target.value); setSearch(e.target.value); }}
+          />
+          <button onClick={onClose}><X className="h-4 w-4 text-[#9CA3AF]" /></button>
         </div>
-
-        <h3 className="text-xs font-bold tracking-widest uppercase text-slate-400 dark:text-white/30 mb-4">Priority Stream</h3>
-        <div className="flex gap-4 overflow-x-auto pb-6 no-scrollbar snap-x">
-          {priorityTasks.map((task, i) => (
-            <div 
-              key={task.id} 
-              onClick={() => onOpenTask(task)}
-              className="snap-start shrink-0 w-64 eclipse-card p-5 cursor-pointer group"
-            >
-              <div className="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-4 group-hover:scale-110 transition-transform">
-                <ListTodo size={16} />
-              </div>
-              <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-1 leading-tight">{task.title}</h4>
-              <p className="text-xs text-slate-500 dark:text-white/40 font-medium">{task.project}</p>
-            </div>
-          ))}
-        </div>
+        {results.length > 0 ? (
+          <ul className="divide-y divide-[#F3F4F6] max-h-72 overflow-y-auto thin-scrollbar">
+            {results.map((t) => (
+              <li key={t.id}>
+                <button
+                  onClick={() => { setSearch(''); onClose(); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#F9FAFB] transition-colors"
+                >
+                  <span className="num text-[11px] text-[#9CA3AF] w-16 shrink-0">{t.id}</span>
+                  <span className="text-sm font-medium text-[#111827] truncate">{t.title}</span>
+                  <span className={`ml-auto shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                    t.status === 'Done'    ? 'bg-[#DCFCE7] text-[#166534]' :
+                    t.status === 'Pending' ? 'bg-[#EFF6FF] text-[#1D4ED8]' :
+                    t.status === 'Delay'   ? 'bg-[#FFFBEB] text-[#B45309]' :
+                                             'bg-[#FEF2F2] text-[#B91C1C]'
+                  }`}>{t.status}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : q ? (
+          <p className="px-4 py-6 text-sm text-center text-[#9CA3AF]">No tasks match "{q}"</p>
+        ) : (
+          <p className="px-4 py-4 text-xs text-center text-[#9CA3AF]">Start typing to search tasks…</p>
+        )}
       </div>
-
-      {/* Right Column: Massive Immersive Chart */}
-      <div className="flex-1 flex items-center justify-center relative min-h-[500px]">
-        <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/10 to-purple-500/10 rounded-[4rem] blur-3xl -z-10"></div>
-        <div className="w-full h-full max-w-[600px] max-h-[600px] relative animate-float">
-          <ResponsiveContainer width="100%" height="100%">
-            <RadialBarChart cx="50%" cy="50%" innerRadius="30%" outerRadius="100%" barSize={24} data={radialData} startAngle={90} endAngle={-270}>
-              <PolarAngleAxis type="number" domain={[0, 150]} angleAxisId={0} tick={false} />
-              <RadialBar
-                minAngle={15}
-                background={{ fill: 'rgba(255,255,255,0.02)' }}
-                clockWise
-                dataKey="count"
-                cornerRadius={12}
-              />
-              <Tooltip cursor={{fill: 'transparent'}} contentStyle={{ borderRadius: '12px' }} />
-            </RadialBarChart>
-          </ResponsiveContainer>
-          {/* Center Content */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            <span className="text-4xl font-black text-slate-900 dark:text-white">{tasks.length}</span>
-            <span className="text-xs font-bold tracking-widest uppercase text-slate-400 dark:text-white/40 mt-1">Workflows</span>
-          </div>
-        </div>
-      </div>
-
     </div>
   );
 }
 
-function EclipseShell() {
-  const [activeTab, setActiveTab] = useState('Overview');
-  const [openTask, setOpenTask] = useState(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [isDark, setIsDark] = useState(true);
+// ── Notifications panel ───────────────────────────────────────────────────────
+const TYPE_DOT = {
+  whatsapp:   'bg-[#0EA5E9]',
+  escalation: 'bg-[#EF4444]',
+  status:     'bg-[#8B5CF6]',
+  approval:   'bg-[#22C55E]',
+};
+
+function relativeTime(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1)  return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs} hr ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function NotifPanel({ onClose }) {
+  const { notifications, markAllRead, notifLastSeen } = useApp();
+  const ref = useRef(null);
 
   useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [isDark]);
-
-  const renderView = () => {
-    switch (activeTab) {
-      case 'Overview': return <EclipseOverview onOpenTask={setOpenTask} />;
-      case 'Tasks': return <div className="h-full overflow-y-auto p-8 max-w-[1400px] mx-auto"><TasksView onOpenTask={setOpenTask} /></div>;
-      case 'Team': return <div className="h-full overflow-y-auto p-8 max-w-[1400px] mx-auto"><TeamView /></div>;
-      case 'Approvals': return <div className="h-full overflow-y-auto p-8 max-w-[1400px] mx-auto"><ApprovalsView onOpenTask={setOpenTask} /></div>;
-      case 'Analytics': return <div className="h-full overflow-y-auto p-8 max-w-[1400px] mx-auto"><AnalyticsView /></div>;
-      default: return <EclipseOverview onOpenTask={setOpenTask} />;
-    }
-  };
-
-  const dockItems = [
-    { id: 'Overview', icon: Home },
-    { id: 'Tasks', icon: ListTodo },
-    { id: 'Team', icon: Users },
-    { id: 'Analytics', icon: BarChart3 },
-  ];
+    const fn = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, [onClose]);
 
   return (
-    <div className="flex flex-col h-screen font-sans overflow-hidden relative selection:bg-indigo-500/30">
-      
-      {/* Top Floating Header */}
-      <header className="absolute top-4 left-6 right-6 flex items-center justify-between z-50 pointer-events-none">
-        <div className="flex items-center gap-3 pointer-events-auto">
-          <div className="w-10 h-10 rounded-xl bg-white/50 dark:bg-white/10 backdrop-blur-md border border-slate-200 dark:border-white/10 flex items-center justify-center shadow-sm">
-            <span className="text-lg font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-pink-500">FD</span>
-          </div>
-          <span className="text-lg font-black tracking-tight text-slate-800 dark:text-white/90 hidden sm:block">FlowDesk</span>
-        </div>
-        
-        <div className="flex items-center gap-3 pointer-events-auto">
-          <button className="w-10 h-10 rounded-full eclipse-card flex items-center justify-center text-slate-500 dark:text-white/70 hover:text-indigo-500 dark:hover:text-white">
-            <Search size={18} />
-          </button>
-          <button className="w-10 h-10 rounded-full eclipse-card flex items-center justify-center text-slate-500 dark:text-white/70 hover:text-indigo-500 dark:hover:text-white relative">
-            <Bell size={18} />
-            <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-pink-500 rounded-full border-2 border-white dark:border-[#030303]"></span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 w-full h-full relative z-10 pt-24 pb-32">
-        {renderView()}
-      </main>
-
-      {/* Mac OS Style Floating Dock */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50">
-        <div className="flex items-center gap-2 p-1.5 rounded-full bg-white/50 dark:bg-white/5 backdrop-blur-3xl border border-slate-200 dark:border-white/10 shadow-xl dark:shadow-2xl">
-          {dockItems.map(item => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`relative flex flex-col items-center justify-center w-12 h-12 rounded-full transition-all duration-300 group
-                  ${isActive ? 'bg-slate-200 dark:bg-white/10 scale-105' : 'hover:bg-slate-100 dark:hover:bg-white/5 hover:scale-105'}`}
-              >
-                <Icon size={20} className={isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 dark:text-white/50 group-hover:text-slate-800 dark:group-hover:text-white/80'} />
-                {isActive && <div className="absolute -bottom-0.5 w-1.5 h-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.6)]"></div>}
-              </button>
-            )
-          })}
-          
-          <div className="w-[1px] h-8 bg-slate-300 dark:bg-white/10 mx-2"></div>
-          
-          <button onClick={() => setCreateOpen(true)} className="w-12 h-12 rounded-full bg-indigo-500 text-white flex flex-col items-center justify-center hover:scale-105 transition-all duration-300 shadow-lg">
-            <Plus size={22} />
-          </button>
-          
-          <button onClick={() => setIsDark(!isDark)} className="w-12 h-12 rounded-full bg-slate-200 dark:bg-[#111] text-slate-700 dark:text-amber-400 flex flex-col items-center justify-center hover:scale-105 transition-all duration-300 ml-1">
-            {isDark ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
-        </div>
+    <div
+      ref={ref}
+      className="absolute right-0 top-full mt-2 w-80 bg-white border border-[#E5E7EB] rounded-2xl shadow-xl z-50 overflow-hidden animate-pop-in"
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[#F3F4F6]">
+        <p className="text-sm font-bold text-[#111827]">Notifications</p>
+        <button onClick={markAllRead} className="text-xs font-semibold text-[#1E1B3A] hover:underline">
+          Mark all read
+        </button>
       </div>
+      <ul className="max-h-72 overflow-y-auto thin-scrollbar divide-y divide-[#F3F4F6]">
+        {notifications.length === 0 && (
+          <li className="px-4 py-6 text-sm text-center text-[#9CA3AF]">All caught up!</li>
+        )}
+        {notifications.map((n) => {
+          // Support both API format (title/detail/createdAt) and mock format (text/time/unread)
+          const heading  = n.title  || n.text    || n.message || '';
+          const subtext  = n.detail || n.taskTitle || '';
+          const timeStr  = n.createdAt ? relativeTime(n.createdAt) : (n.time ?? 'just now');
+          const isUnread = n.createdAt
+            ? new Date(n.createdAt) > new Date(notifLastSeen)
+            : (n.unread ?? false);
+          const dotCls   = TYPE_DOT[n.type] || 'bg-[#6366F1]';
 
-      <TaskDetailsModal task={openTask} onClose={() => setOpenTask(null)} />
-      <CreateTaskModal open={createOpen} onClose={() => setCreateOpen(false)} />
+          return (
+            <li
+              key={n.id}
+              className={`flex gap-3 px-4 py-3 transition-colors ${isUnread ? 'bg-[#FAFBFF]' : ''}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${dotCls} shrink-0 mt-1.5 ${isUnread ? 'opacity-100' : 'opacity-0'}`} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-[#111827] leading-snug">{heading}</p>
+                {subtext && <p className="text-[11px] text-[#6B7280] mt-0.5 truncate">{subtext}</p>}
+                <p className="text-[11px] text-[#9CA3AF] mt-0.5">{timeStr}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
 
-export default function App() {
+// ── User dropdown ─────────────────────────────────────────────────────────────
+function UserDropdown({ user, onLogout, onRoleSwitch }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const { role } = useApp();
+
+  useEffect(() => {
+    const fn = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, []);
+
+  const initials = user?.name?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'AM';
+  const colors = {
+    Admin:    'from-fuchsia-500 to-purple-600',
+    Manager:  'from-rose-500 to-orange-500',
+    Employee: 'from-sky-500 to-indigo-500',
+  };
+  const grad = colors[role] || colors.Admin;
+
   return (
-    <AppProvider>
-      <EclipseShell />
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full hover:bg-gray-100 transition-colors"
+      >
+        <div className={`w-8 h-8 rounded-full bg-gradient-to-br ${grad} flex items-center justify-center text-white text-xs font-bold select-none`}>
+          {initials}
+        </div>
+        <div className="hidden sm:block text-left">
+          <p className="text-xs font-semibold text-[#111827] leading-none">{user?.name || 'Aarav M'}</p>
+          <p className="text-[10px] text-[#9CA3AF] leading-none mt-0.5">{user?.email || 'aarav@flowdesk.io'}</p>
+        </div>
+        <ChevronDown size={14} className={`text-[#9CA3AF] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-52 bg-white border border-[#E5E7EB] rounded-2xl shadow-xl z-50 overflow-hidden animate-pop-in">
+          <div className="px-4 py-3 border-b border-[#F3F4F6]">
+            <p className="text-[10px] font-bold tracking-widest uppercase text-[#9CA3AF]">Switch Role</p>
+          </div>
+          {ROLES.map((r) => (
+            <button
+              key={r}
+              onClick={() => { onRoleSwitch(r); setOpen(false); }}
+              className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors ${
+                role === r ? 'bg-[#1E1B3A] text-white' : 'text-[#374151] hover:bg-gray-50'
+              }`}
+            >
+              {r} view
+            </button>
+          ))}
+          <div className="border-t border-[#F3F4F6]">
+            <button
+              onClick={() => { setOpen(false); onLogout(); }}
+              className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#B91C1C] hover:bg-red-50 transition-colors"
+            >
+              <LogOut size={14} /> Sign out
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main shell ────────────────────────────────────────────────────────────────
+function FlowDeskShell({ onLogout }) {
+  const { activeUser, role, setRole, theme, toggleTheme, unreadCount } = useApp();
+  const [activeTab, setActiveTab]   = useState(() => DEFAULT_TAB[role] || 'Dashboard');
+  const [openTask,  setOpenTask]    = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [notifOpen,  setNotifOpen]  = useState(false);
+  const notifRef = useRef(null);
+
+  // Reset tab when role changes
+  useEffect(() => {
+    setActiveTab(DEFAULT_TAB[role] || 'Dashboard');
+  }, [role]);
+
+  // Keyboard shortcut: Cmd/Ctrl+K → search
+  useEffect(() => {
+    const fn = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); }
+    };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, []);
+
+  const navItems = NAV_BY_ROLE[role] || NAV_BY_ROLE.Admin;
+
+  const isDashboardTab =
+    (role === 'Employee' && activeTab === 'MyDay') ||
+    (role !== 'Employee' && activeTab === 'Dashboard');
+
+  function renderView() {
+    const props = { onOpenTask: setOpenTask, onNavigate: setActiveTab };
+    if (role === 'Admin') {
+      switch (activeTab) {
+        case 'Dashboard':   return <AdminDashboard   {...props} />;
+        case 'Tasks':       return <TasksView        {...props} />;
+        case 'Analytic':    return <AnalyticsView />;
+        case 'Team':        return <TeamView />;
+        case 'Escalations': return <EscalationsView  {...props} />;
+        case 'Tracker':     return <WhatsAppHub />;
+        default:            return <AdminDashboard   {...props} />;
+      }
+    }
+    if (role === 'Manager') {
+      switch (activeTab) {
+        case 'Dashboard': return <ManagerDashboard {...props} />;
+        case 'Tasks':     return <TasksView        {...props} />;
+        case 'Approvals': return <ApprovalsView    {...props} />;
+        case 'Team':      return <TeamView />;
+        case 'Tracker':   return <WhatsAppHub />;
+        default:          return <ManagerDashboard {...props} />;
+      }
+    }
+    if (role === 'Employee') {
+      switch (activeTab) {
+        case 'MyDay':    return <EmployeeDashboard {...props} />;
+        case 'MyTasks':  return <TasksView         {...props} />;
+        case 'Tracker':  return <WhatsAppHub />;
+        default:         return <EmployeeDashboard {...props} />;
+      }
+    }
+    return <AdminDashboard {...props} />;
+  }
+
+  return (
+    <div className="flex flex-col h-screen overflow-hidden" style={{ background: '#ECEDF5' }}>
+
+      {/* ── Navbar ──────────────────────────────────────────────────── */}
+      <div className="shrink-0 px-4 pt-4 z-40">
+        <nav className="bg-white border border-[#E5E7EB] rounded-2xl shadow-sm max-w-[1400px] mx-auto px-4 py-2.5 flex items-center gap-3">
+
+          {/* Logo */}
+          <div className="flex items-center gap-2 mr-2 shrink-0 cursor-pointer" onClick={() => setActiveTab(DEFAULT_TAB[role])}>
+            <div className="w-8 h-8 rounded-full bg-[#1E1B3A] flex items-center justify-center text-white text-sm font-black select-none">
+              F
+            </div>
+            <span className="text-sm font-bold text-[#111827] hidden sm:block">FlowDesk</span>
+          </div>
+
+          {/* Nav pills */}
+          <div className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar">
+            {navItems.map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`whitespace-nowrap transition-all duration-200 ${
+                  activeTab === id ? 'fd-nav-pill-active' : 'fd-nav-pill'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Right controls */}
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Search */}
+            <button
+              onClick={() => setSearchOpen(true)}
+              title="Search (⌘K)"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[#6B7280] hover:bg-gray-100 hover:text-[#111827] transition-colors"
+            >
+              <Search size={16} />
+            </button>
+
+            {/* Bell */}
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={() => setNotifOpen((v) => !v)}
+                className="relative w-9 h-9 rounded-full flex items-center justify-center text-[#6B7280] hover:bg-gray-100 hover:text-[#111827] transition-colors"
+              >
+                <Bell size={16} />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+                )}
+              </button>
+              {notifOpen && <NotifPanel onClose={() => setNotifOpen(false)} />}
+            </div>
+
+            {/* Dark mode */}
+            <button
+              onClick={toggleTheme}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-[#6B7280] hover:bg-gray-100 hover:text-[#111827] transition-colors"
+            >
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+
+            <div className="w-px h-5 bg-[#E5E7EB] mx-1" />
+
+            <UserDropdown
+              user={activeUser}
+              onLogout={onLogout}
+              onRoleSwitch={(r) => setRole(r)}
+            />
+          </div>
+        </nav>
+      </div>
+
+      {/* ── Page Content ─────────────────────────────────────────────── */}
+      <main className="flex-1 min-h-0 overflow-y-auto px-4 py-5">
+        <div className="max-w-[1400px] mx-auto pb-10">
+
+          {/* Dashboard page header (role-aware) */}
+          {isDashboardTab && (
+            <div className="flex items-start justify-between mb-5 animate-fade-in">
+              <div>
+                <h1 className="text-xl font-bold text-[#111827]">CaratSense × Client Team</h1>
+                <p className="text-sm text-[#6B7280] mt-0.5">
+                  WhatsApp-driven task operations · ID FD-2026-OPS{' '}
+                  <button
+                    onClick={() => navigator.clipboard?.writeText('FD-2026-OPS')}
+                    className="inline-flex text-[#9CA3AF] hover:text-[#6B7280] transition-colors ml-0.5"
+                    title="Copy ID"
+                  >
+                    📋
+                  </button>
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex -space-x-2">
+                  {[
+                    'from-fuchsia-500 to-purple-600',
+                    'from-rose-500 to-orange-500',
+                    'from-sky-500 to-indigo-500',
+                    'from-emerald-500 to-teal-500',
+                  ].map((c, i) => (
+                    <div key={i} className={`w-8 h-8 rounded-full bg-gradient-to-br ${c} border-2 border-white`} />
+                  ))}
+                  <div className="w-8 h-8 rounded-full bg-[#E5E7EB] border-2 border-white flex items-center justify-center text-[10px] font-bold text-[#6B7280]">
+                    +7
+                  </div>
+                </div>
+                <button onClick={() => setCreateOpen(true)} className="fd-btn-primary">
+                  <Plus size={14} /> New Task
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* View — key forces re-mount + fade-in on tab change */}
+          <div key={`${role}-${activeTab}`} className="animate-fade-in">
+            {renderView()}
+          </div>
+
+          {/* Footer */}
+          <p className="mt-10 text-center text-xs text-[#9CA3AF]">
+            © FlowDesk · WhatsApp Task Operations · demo build
+          </p>
+        </div>
+      </main>
+
+      {/* Modals */}
+      <TaskDetailsModal task={openTask}    onClose={() => setOpenTask(null)} />
+      <CreateTaskModal  open={createOpen}  onClose={() => setCreateOpen(false)} />
+
+      {/* Search overlay */}
+      {searchOpen && <SearchOverlay onClose={() => setSearchOpen(false)} />}
+    </div>
+  );
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [authed,      setAuthed]      = useState(isLoggedIn);
+  const [loggedInUser, setLoggedInUser] = useState(getSavedUser);
+
+  if (!authed) {
+    return <LoginView onLogin={(u) => { setLoggedInUser(u); setAuthed(true); }} />;
+  }
+
+  return (
+    <AppProvider loggedInUser={loggedInUser}>
+      <FlowDeskShell onLogout={() => { clearSession(); setAuthed(false); setLoggedInUser(null); }} />
     </AppProvider>
   );
 }

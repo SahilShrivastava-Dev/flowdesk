@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  Admin
+  Manager
+  Employee
+}
+
+enum TaskStatus {
+  Pending
+  Done
+  Issue
+  Delay
+}
+
+enum Priority {
+  Low
+  Medium
+  High
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  role          Role     @default(Employee)
+  reportingToId String?
+  reportingTo   User?    @relation("tree", fields: [reportingToId], references: [id])
+  reports       User[]   @relation("tree")
+  phone         String?
+  avatar        String   @default("")
+  color         String   @default("from-slate-400 to-slate-600")
+  createdAt     DateTime @default(now())
+
+  assignedTasks Task[]     @relation("Assignee")
+  createdTasks  Task[]     @relation("Creator")
+  activities    Activity[]
+}
+
+model Task {
+  id              String     @id @default(cuid())
+  title           String
+  description     String     @default("")
+  assignedToId    String
+  assignedTo      User       @relation("Assignee", fields: [assignedToId], references: [id])
+  assignedById    String
+  assignedBy      User       @relation("Creator", fields: [assignedById], references: [id])
+  status          TaskStatus @default(Pending)
+  priority        Priority   @default(Medium)
+  deadline        DateTime
+  escalationLevel Int        @default(0)
+  approved        Boolean    @default(false)
+  customFields    Json       @default("{}")
+  alertDispatched Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  activities Activity[]
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  byId      String
+  by        User     @relation(fields: [byId], references: [id])
+  type      String
+  text      String
+  mediaUrl  String?  // Cloudinary URL for WhatsApp image/document attachments
+  createdAt DateTime @default(now())
+}

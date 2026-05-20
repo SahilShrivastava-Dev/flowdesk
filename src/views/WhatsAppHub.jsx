@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import { findUser, isOverdue } from '../data/mockData.js';
 import Avatar from '../components/Avatar.jsx';
-import PageHeader from '../components/PageHeader.jsx';
 import { MessageCircle, Send, CheckCheck } from 'lucide-react';
 
 const SAMPLE_THREAD = [
@@ -13,42 +12,56 @@ const SAMPLE_THREAD = [
 ];
 
 export default function WhatsAppHub() {
-  const { tasks } = useApp();
+  const { tasks }   = useApp();
   const [activeId, setActiveId] = useState(tasks[0]?.id);
-  const active = tasks.find((t) => t.id === activeId);
+  const [message, setMessage]   = useState('');
+  const active  = tasks.find((t) => t.id === activeId);
   const partner = active ? findUser(active.assignedTo) : null;
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        eyebrow="WhatsApp Hub"
-        title="Live conversations"
-        subtitle="Every task gets its own thread. Replies sync to status, comments, and escalations."
-      />
+    <div className="space-y-4">
+      {/* Header */}
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-widest text-[#9CA3AF]">WhatsApp Hub</p>
+        <h2 className="text-xl font-bold text-[#111827] mt-0.5">Live conversations</h2>
+        <p className="text-sm text-[#6B7280] mt-0.5">
+          Every task gets its own thread. Replies sync to status, comments, and escalations.
+        </p>
+      </div>
 
-      <div className="card overflow-hidden grid grid-cols-1 md:grid-cols-3 h-[68vh]">
-        <aside className="border-r border-ink-200 dark:border-white/[.06] overflow-y-auto">
-          <ul className="divide-y divide-ink-100 dark:divide-white/[.04]">
+      {/* Two-panel layout */}
+      <div className="fd-card overflow-hidden grid grid-cols-1 md:grid-cols-3" style={{ height: 'calc(100vh - 220px)', minHeight: '500px' }}>
+
+        {/* ── Left panel: conversation list ─── */}
+        <aside className="border-r border-[#E5E7EB] overflow-y-auto thin-scrollbar">
+          <ul className="divide-y divide-[#F3F4F6]">
             {tasks.map((t) => {
-              const u = findUser(t.assignedTo);
+              const u       = findUser(t.assignedTo);
               const overdue = isOverdue(t);
-              const isActive = t.id === activeId;
+              const isAct   = t.id === activeId;
               return (
                 <li key={t.id}>
                   <button
                     onClick={() => setActiveId(t.id)}
-                    className={`w-full flex items-start gap-3 px-3 py-3 text-left transition-colors ${isActive ? 'bg-ink-50 dark:bg-white/[.04]' : 'hover:bg-ink-50/60 dark:hover:bg-white/[.02]'}`}
+                    className={`w-full flex items-start gap-3 px-4 py-3.5 text-left transition-colors
+                      ${isAct ? 'bg-[#F5F3FF]' : 'hover:bg-[#F9FAFB]'}`}
                   >
                     <Avatar user={u} size="md" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="font-medium text-ink-900 dark:text-ink-50 truncate">{u?.name}</p>
-                        <span className="num text-[10px] text-ink-400">{t.id}</span>
+                        <p className="font-semibold text-[#111827] text-sm truncate">{u?.name}</p>
+                        <span className="num text-[10px] text-[#9CA3AF] shrink-0">{t.id}</span>
                       </div>
-                      <p className="text-xs text-ink-500 dark:text-ink-400 truncate">{t.title}</p>
-                      <div className="mt-1 flex items-center gap-1.5">
-                        {overdue && <span className="chip bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">overdue</span>}
-                        <span className="chip bg-ink-100 text-ink-700 dark:bg-white/[.06] dark:text-ink-200">{t.status}</span>
+                      <p className="text-xs text-[#6B7280] truncate mt-0.5">{t.title}</p>
+                      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                        {overdue && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FEF2F2] text-[#B91C1C]">
+                            overdue
+                          </span>
+                        )}
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#EFF6FF] text-[#1D4ED8]">
+                          {t.status}
+                        </span>
                       </div>
                     </div>
                   </button>
@@ -58,39 +71,72 @@ export default function WhatsAppHub() {
           </ul>
         </aside>
 
-        <section className="md:col-span-2 flex flex-col bg-ink-50/50 dark:bg-white/[.01]">
+        {/* ── Right panel: chat area ─────────── */}
+        <section className="md:col-span-2 flex flex-col bg-[#FAFAFA]">
           {active ? (
             <>
-              <div className="flex items-center gap-3 px-4 py-3 border-b border-ink-200 dark:border-white/[.06] bg-white/80 dark:bg-neutral-900">
+              {/* Chat header */}
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-[#E5E7EB] bg-white">
                 <Avatar user={partner} size="md" />
                 <div className="min-w-0">
-                  <p className="font-medium text-ink-900 dark:text-ink-50">{partner?.name}</p>
-                  <p className="num text-[11px] text-ink-500 dark:text-ink-400 inline-flex items-center gap-1">
-                    <MessageCircle className="h-3 w-3 text-emerald-500" /> Thread for {active.id} · {active.title}
+                  <p className="font-semibold text-[#111827] text-sm">{partner?.name}</p>
+                  <p className="text-xs text-[#9CA3AF] flex items-center gap-1">
+                    <MessageCircle className="h-3 w-3 text-[#22C55E]" />
+                    Thread for {active.id} · {active.title}
                   </p>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto thin-scrollbar p-4 space-y-3">
                 {SAMPLE_THREAD.map((m, i) => (
-                  <div key={i} className={`flex ${m.from === 'me' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${m.from === 'me' ? 'bg-brand-600 text-white rounded-br-md' : 'bg-white dark:bg-neutral-900 text-ink-800 dark:text-neutral-100 rounded-bl-md border border-ink-200 dark:border-white/[.06]'}`}>
+                  <div
+                    key={i}
+                    className={`flex ${m.from === 'me' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
+                        m.from === 'me'
+                          ? 'bg-[#1E1B3A] text-white rounded-br-md'
+                          : 'bg-white text-[#374151] rounded-bl-md border border-[#E5E7EB]'
+                      }`}
+                    >
                       {m.text}
-                      <div className={`mt-1 num text-[10px] flex items-center gap-1 ${m.from === 'me' ? 'text-white/80 justify-end' : 'text-ink-400 dark:text-ink-500'}`}>
-                        {m.time} {m.from === 'me' && <CheckCheck className="h-3 w-3" />}
+                      <div
+                        className={`mt-1 num text-[10px] flex items-center gap-1 ${
+                          m.from === 'me' ? 'text-white/60 justify-end' : 'text-[#9CA3AF]'
+                        }`}
+                      >
+                        {m.time}
+                        {m.from === 'me' && <CheckCheck className="h-3 w-3" />}
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="p-3 border-t border-ink-200 dark:border-white/[.06] bg-white/80 dark:bg-neutral-900 flex items-center gap-2">
-                <input className="input" placeholder={`Message ${partner?.name?.split(' ')[0]} on WhatsApp…`} />
-                <button className="btn-success"><Send className="h-4 w-4" /> Send</button>
+              {/* Input bar */}
+              <div className="p-3 border-t border-[#E5E7EB] bg-white flex items-center gap-2">
+                <input
+                  className="fd-input flex-1"
+                  placeholder={`Message ${partner?.name?.split(' ')[0]} on WhatsApp…`}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && setMessage('')}
+                />
+                <button
+                  onClick={() => setMessage('')}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#22C55E] text-white text-sm font-semibold hover:bg-[#16A34A] transition-colors shrink-0"
+                >
+                  <Send className="h-4 w-4" />
+                  Send
+                </button>
               </div>
             </>
           ) : (
-            <div className="flex-1 grid place-items-center text-sm text-ink-500">Select a thread to see the conversation.</div>
+            <div className="flex-1 flex items-center justify-center text-sm text-[#9CA3AF]">
+              Select a thread to see the conversation.
+            </div>
           )}
         </section>
       </div>

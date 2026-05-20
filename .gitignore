@@ -4,6 +4,9 @@ dist
 *.log
 .env
 .env.local
+.env.production
 .vscode
-
+Problem_statment.txt
 .vercel
+backend/.env
+backend/dist

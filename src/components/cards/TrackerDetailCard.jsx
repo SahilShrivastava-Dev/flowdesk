@@ -1,5 +1,5 @@
 import React from 'react';
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts';
 
 const DEFAULT_DATA = [
   { day: 'Mon', focus: 6, break: 2 },
@@ -12,35 +12,49 @@ const DEFAULT_DATA = [
 
 export default function TrackerDetailCard({ data = DEFAULT_DATA, onSeeAll }) {
   return (
-    <div className="card p-5">
+    <div className="fd-card p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="section-title">Tracker Detail</h2>
-        <button onClick={onSeeAll} className="see-all">See All</button>
+        <h2 className="text-sm font-bold text-[#111827]">Tracker Detail</h2>
+        <button onClick={onSeeAll} className="text-xs font-semibold text-[#1E1B3A] hover:underline">
+          See All
+        </button>
       </div>
 
-      <div className="flex items-center justify-end gap-4 mb-1">
-        <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-500 dark:text-ink-400">
-          <span className="h-2.5 w-2.5 rounded-full bg-orange-400" /> Focus
+      <div className="flex items-center gap-4 mb-3">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280]">
+          <span className="h-2 w-2 rounded-full bg-[#FB923C] inline-block" />
+          Focus
         </span>
-        <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-500 dark:text-ink-400">
-          <span className="h-2.5 w-2.5 rounded-full bg-slate-300" /> Break
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280]">
+          <span className="h-2 w-2 rounded-full bg-[#E5E7EB] inline-block" />
+          Break
         </span>
       </div>
 
-      <div className="h-[210px]">
+      <div className="h-[190px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 8, right: 8, left: -22, bottom: 0 }} barCategoryGap="32%">
+          <BarChart
+            data={data}
+            margin={{ top: 8, right: 8, left: -22, bottom: 0 }}
+            barCategoryGap="32%"
+          >
             <XAxis
               dataKey="day"
-              tick={{ fontSize: 11, fill: '#94a3b8' }}
+              tick={{ fontSize: 11, fill: '#9CA3AF' }}
               tickLine={false}
               axisLine={false}
-              hide
             />
             <YAxis hide />
-            <Tooltip cursor={{ fill: 'rgba(60,46,116,.04)' }} />
-            <Bar dataKey="focus" fill="#fb923c" radius={[14, 14, 14, 14]} />
-            <Bar dataKey="break" fill="#cbd5e1" radius={[14, 14, 14, 14]} />
+            <Tooltip
+              cursor={{ fill: 'rgba(30,27,58,.04)' }}
+              contentStyle={{
+                borderRadius: '10px',
+                border: '1px solid #E5E7EB',
+                fontSize: '12px',
+              }}
+            />
+            <Bar dataKey="focus" fill="#FB923C" radius={[8, 8, 8, 8]} />
+            <Bar dataKey="break" fill="#E5E7EB" radius={[8, 8, 8, 8]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: flowdesk-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: META_PHONE_ID
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_VERIFY_TOKEN
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

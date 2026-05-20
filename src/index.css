@@ -2,108 +2,183 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light dark; }
+:root { color-scheme: light; }
 
-html, body, #root { height: 100%; overflow: hidden; }
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
 
 body {
-  font-family: 'Outfit', 'Inter', system-ui, sans-serif;
-  background-color: #f1f5f9;
-  color: #0f172a;
+  font-family: 'Inter', 'Outfit', system-ui, sans-serif;
+  background-color: #ECEDF5;
+  color: #111827;
   -webkit-font-smoothing: antialiased;
-  background-image: 
-    radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.06) 0%, transparent 50%),
-    radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.06) 0%, transparent 50%);
-  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-.dark body {
-  background-color: #030303;
-  color: #ffffff;
-  background-image: 
-    radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.08) 0%, transparent 50%);
-}
-
-/* Opt-in scrollbar hiding — apply .no-scrollbar to specific containers that need it */
+/* Scrollbar */
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-scrollbar::-webkit-scrollbar { width: 0; height: 0; }
 
+/* Thin scrollbar for panels */
+.thin-scrollbar { scrollbar-width: thin; scrollbar-color: #E5E7EB transparent; }
+.thin-scrollbar::-webkit-scrollbar { width: 4px; }
+.thin-scrollbar::-webkit-scrollbar-thumb { background: #E5E7EB; border-radius: 99px; }
+
 @layer components {
-  /* Eclipse Design System - Light & Dark */
-  .eclipse-card {
-    @apply bg-white/70 dark:bg-white/[0.02] backdrop-blur-3xl border border-slate-200 dark:border-white/[0.05] rounded-3xl 
-           hover:border-indigo-200 dark:hover:border-white/[0.1] hover:bg-white dark:hover:bg-white/[0.04] transition-all duration-500 shadow-xl dark:shadow-2xl;
-  }
-  
-  .eclipse-btn {
-    @apply relative overflow-hidden inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 
-           text-sm font-bold tracking-wide transition-all duration-300 select-none;
-  }
-  
-  .eclipse-btn-primary {
-    @apply eclipse-btn bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.2)] hover:scale-105 hover:shadow-[0_0_30px_rgba(99,102,241,0.4)];
-  }
-  
-  .eclipse-btn-secondary {
-    @apply eclipse-btn bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-white/70 hover:bg-slate-200 dark:hover:bg-white/10 hover:text-slate-900 dark:hover:text-white;
+
+  /* ── Base Card ─────────────────────────────────────── */
+  .fd-card {
+    @apply bg-white border border-[#E5E7EB] rounded-2xl shadow-sm transition-shadow duration-200;
   }
 
-  .eclipse-input {
-    @apply w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-sm text-slate-900 dark:text-white
-           placeholder:text-slate-400 dark:placeholder:text-white/30 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all;
+  /* ── Primary Button ────────────────────────────────── */
+  .fd-btn-primary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#1E1B3A] text-white text-sm font-semibold
+           hover:bg-[#2d2854] transition-colors cursor-pointer select-none;
   }
 
-  /* Override legacy components */
-  .card { @apply eclipse-card; }
-  .btn-primary { @apply eclipse-btn-primary; }
-  .btn-ghost { @apply eclipse-btn-secondary border-transparent bg-transparent; }
-  .btn-soft { @apply eclipse-btn-secondary; }
-  .input { @apply eclipse-input; }
+  /* ── Ghost / Secondary Button ──────────────────────── */
+  .fd-btn-secondary {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#E5E7EB] bg-white text-[#374151] text-sm font-medium
+           hover:bg-gray-50 transition-colors cursor-pointer select-none;
+  }
 
-  /* Legacy utility classes still used by TaskTable, TaskDetailsModal, StatusBadge, and card components */
+  /* ── Nav pill (inactive) ───────────────────────────── */
+  .fd-nav-pill {
+    @apply px-4 py-2 rounded-full text-sm font-medium text-[#6B7280] hover:text-[#111827] hover:bg-gray-100 transition-colors cursor-pointer;
+  }
+
+  /* ── Nav pill (active) ─────────────────────────────── */
+  .fd-nav-pill-active {
+    @apply px-4 py-2 rounded-full text-sm font-semibold text-white bg-[#1E1B3A] cursor-pointer;
+  }
+
+  /* ── Status Badges ─────────────────────────────────── */
+  .fd-status-done {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#DCFCE7] text-[#166534] border border-[#BBF7D0];
+  }
+  .fd-status-pending {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE];
+  }
+  .fd-status-delay {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A];
+  }
+  .fd-status-issue {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA];
+  }
+
+  /* ── Priority Badges ───────────────────────────────── */
+  .fd-priority-high {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#FEF2F2] text-[#DC2626];
+  }
+  .fd-priority-medium {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#FFF7ED] text-[#C2410C];
+  }
+  .fd-priority-low {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold
+           bg-[#F9FAFB] text-[#6B7280];
+  }
+
+  /* ── Table Styles ──────────────────────────────────── */
+  .fd-table-head {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[#6B7280] bg-[#F9FAFB] border-b border-[#E5E7EB];
+  }
+  .fd-table-cell {
+    @apply px-4 py-3 align-middle text-sm text-[#374151] border-b border-[#F3F4F6];
+  }
+  .fd-row-hover {
+    @apply transition-colors hover:bg-[#F9FAFB] cursor-pointer;
+  }
+
+  /* ── Input ─────────────────────────────────────────── */
+  .fd-input {
+    @apply w-full rounded-xl border border-[#E5E7EB] bg-white px-3.5 py-2.5 text-sm text-[#111827]
+           placeholder:text-[#9CA3AF] focus:outline-none focus:border-[#1E1B3A] focus:ring-1 focus:ring-[#1E1B3A]/20 transition-all;
+  }
+
+  /* ── Legacy aliases (keep old component imports working) ── */
+  .card           { @apply fd-card; }
+  .btn-primary    { @apply fd-btn-primary; }
+  .btn-ghost      { @apply fd-btn-secondary border-transparent bg-transparent hover:bg-gray-100; }
+  .btn-soft       { @apply fd-btn-secondary; }
+  .btn-success    { @apply fd-btn-primary bg-[#16a34a] hover:bg-[#15803d]; }
+  .input          { @apply fd-input; }
+  .label          { @apply block text-xs font-semibold text-[#374151] mb-1; }
+  .section-title  { @apply text-sm font-bold text-[#111827]; }
+  .see-all        { @apply text-xs font-semibold text-[#1E1B3A] hover:underline transition-all; }
+
+  /* chip — legacy (StatusBadge, TaskTable) */
   .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold;
   }
+
+  /* num — monospace utility */
   .num {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     font-variant-numeric: tabular-nums;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
   }
-  .table-head {
-    @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-400 border-b border-slate-200 dark:border-white/10;
+
+  /* Legacy table classes still used by TaskTable */
+  .table-head { @apply fd-table-head; }
+  .table-cell { @apply fd-table-cell; }
+  .row-hover  { @apply fd-row-hover; }
+
+  /* KPI tile used by KPIStrip */
+  .kpi {
+    @apply fd-card p-5 flex flex-col gap-1;
   }
-  .table-cell {
-    @apply px-3 py-3 align-middle text-sm text-slate-700 dark:text-ink-200 border-b border-slate-100 dark:border-white/[0.04];
-  }
-  .row-hover {
-    @apply transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03];
-  }
+
+  /* pastel task-card surfaces */
+  .bg-pastel-blue   { background-color: #dde6f9; }
+  .bg-pastel-purple { background-color: #e3dff6; }
+  .bg-pastel-peach  { background-color: #FFF3EC; }
+  .bg-pastel-mint   { background-color: #d5ecdb; }
+  .bg-pastel-rose   { background-color: #f7d8e2; }
 }
 
 /* Animations */
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
+@keyframes fade-in {
+  0%   { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
-.animate-float {
-  animation: float 6s ease-in-out infinite;
+@keyframes pop-in {
+  0%   { opacity: 0; transform: scale(.96); }
+  100% { opacity: 1; transform: scale(1); }
 }
+@keyframes slide-up {
+  0%   { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.animate-fade-in  { animation: fade-in  .3s ease-out both; }
+.animate-pop-in   { animation: pop-in   .15s ease-out both; }
+.animate-slide-up { animation: slide-up .35s ease-out both; }
 
-/* Recharts Polish */
+/* Stagger children */
+.stagger > * { animation: fade-in .3s ease-out both; }
+.stagger > *:nth-child(1) { animation-delay: .05s; }
+.stagger > *:nth-child(2) { animation-delay: .10s; }
+.stagger > *:nth-child(3) { animation-delay: .15s; }
+.stagger > *:nth-child(4) { animation-delay: .20s; }
+
+/* Recharts */
 .recharts-default-tooltip {
   border-radius: 12px !important;
-  border: 1px solid rgba(150,150,150,0.2) !important;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.1) !important;
-  font-family: 'Outfit', sans-serif !important;
+  border: 1px solid #E5E7EB !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,.06) !important;
+  font-family: 'Inter', sans-serif !important;
   padding: 10px 14px !important;
-  background: rgba(255,255,255,0.9) !important;
-  backdrop-filter: blur(20px) !important;
-  color: #0f172a !important;
+  background: #fff !important;
+  color: #111827 !important;
 }
-.dark .recharts-default-tooltip {
-  background: rgba(10,10,10,0.8) !important;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.5) !important;
-  color: #FFF !important;
-}
-.recharts-text { fill: #94a3b8 !important; font-size: 11px !important; font-weight: 500; }
-.dark .recharts-text { fill: rgba(255,255,255,0.4) !important; }
+.recharts-text { fill: #9CA3AF !important; font-size: 11px !important; font-weight: 500; }

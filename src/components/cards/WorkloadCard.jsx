@@ -3,16 +3,37 @@ import { Users2 } from 'lucide-react';
 import Avatar from '../Avatar.jsx';
 import { findUser } from '../../data/mockData.js';
 
-const STATUS_COLOR = {
-  Done:    'bg-emerald-400',
-  Pending: 'bg-sky-400',
-  Delay:   'bg-amber-400',
-  Issue:   'bg-rose-400',
+// Each status gets a solid color segment on a full-width bar
+const STATUS_COLORS = {
+  Done:    '#22C55E',
+  Pending: '#3B82F6',
+  Delay:   '#F59E0B',
+  Issue:   '#EF4444',
 };
+
+// A single full-width segmented bar showing task breakdown
+function WorkloadBar({ counts, total }) {
+  if (!total) {
+    return <div className="h-2 rounded-full bg-[#F3F4F6] w-full" />;
+  }
+  const segments = ['Done', 'Pending', 'Delay', 'Issue'].filter((s) => counts[s] > 0);
+  return (
+    <div className="h-2 rounded-full overflow-hidden flex w-full gap-[1px]">
+      {segments.map((s) => (
+        <div
+          key={s}
+          className="h-full transition-all duration-700 rounded-sm"
+          style={{ width: `${(counts[s] / total) * 100}%`, background: STATUS_COLORS[s] }}
+          title={`${s}: ${counts[s]}`}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function WorkloadCard({ tasks, users, onSeeAll }) {
   const data = useMemo(() => {
-    const employees = users.filter((u) => u.role === 'Employee');
+    const employees = users.filter((u) => u.role !== 'Admin');
     const rows = employees.map((u) => {
       const my = tasks.filter((t) => t.assignedTo === u.id);
       const counts = {
@@ -23,51 +44,49 @@ export default function WorkloadCard({ tasks, users, onSeeAll }) {
       };
       return { id: u.id, total: my.length, counts };
     });
-    const max = Math.max(1, ...rows.map((r) => r.total));
-    return { rows: rows.sort((a, b) => b.total - a.total), max };
+    return rows.sort((a, b) => b.total - a.total);
   }, [tasks, users]);
 
   return (
-    <div className="card p-5">
+    <div className="fd-card p-5">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <Users2 className="h-4 w-4 text-navy-600 dark:text-neutral-300" />
-          <h2 className="section-title">Workload Distribution</h2>
+          <Users2 className="h-4 w-4 text-[#6B7280]" />
+          <h2 className="text-sm font-bold text-[#111827]">Workload Distribution</h2>
         </div>
-        <button onClick={onSeeAll} className="see-all">See All</button>
+        <button onClick={onSeeAll} className="text-xs font-semibold text-[#1E1B3A] hover:underline">
+          See All
+        </button>
       </div>
 
-      <ul className="space-y-3">
-        {data.rows.map((row) => {
+      <ul className="space-y-3.5">
+        {data.map((row) => {
           const u = findUser(row.id);
-          const widthPct = (row.total / data.max) * 100;
           return (
             <li key={row.id} className="flex items-center gap-3">
               <Avatar user={u} size="sm" />
               <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="text-sm font-medium text-navy-800 dark:text-white truncate">{u?.name}</span>
-                  <span className="num text-xs text-ink-500 dark:text-neutral-400 whitespace-nowrap">{row.total} tasks</span>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span className="text-sm font-medium text-[#111827] truncate">{u?.name}</span>
+                  <span className="num text-xs text-[#9CA3AF] whitespace-nowrap shrink-0">
+                    {row.total} task{row.total !== 1 ? 's' : ''}
+                  </span>
                 </div>
-                <div className="relative flex h-2 rounded-full bg-lavender-100 dark:bg-white/[.05] overflow-hidden" style={{ width: `${widthPct}%`, minWidth: row.total ? '8%' : '0' }}>
-                  {['Done', 'Pending', 'Delay', 'Issue'].map((status) => {
-                    const c = row.counts[status];
-                    if (!c) return null;
-                    const pct = (c / row.total) * 100;
-                    return <span key={status} className={`h-full ${STATUS_COLOR[status]}`} style={{ width: `${pct}%` }} title={`${status}: ${c}`} />;
-                  })}
-                </div>
+                <WorkloadBar counts={row.counts} total={row.total} />
               </div>
             </li>
           );
         })}
       </ul>
 
-      <div className="mt-4 pt-3 border-t border-ink-100 dark:border-white/[.06] flex items-center gap-4 text-[11px] text-ink-500 dark:text-neutral-400">
-        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-emerald-400" /> Done</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-sky-400" /> Pending</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-amber-400" /> Delay</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-rose-400" /> Issue</span>
+      {/* Legend */}
+      <div className="mt-4 pt-3 border-t border-[#F3F4F6] flex items-center gap-4 flex-wrap">
+        {Object.entries(STATUS_COLORS).map(([label, color]) => (
+          <span key={label} className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280]">
+            <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+            {label}
+          </span>
+        ))}
       </div>
     </div>
   );

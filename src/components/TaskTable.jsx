@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ArrowUpDown, ChevronUp, ChevronDown, Filter, Flame, Clock3 } from 'lucide-react';
+import { ArrowUpDown, ChevronUp, ChevronDown, Filter, Flame } from 'lucide-react';
 import { findUser, isOverdue, daysUntil } from '../data/mockData.js';
 import StatusBadge, { PriorityBadge } from './StatusBadge.jsx';
 import Avatar from './Avatar.jsx';
@@ -10,26 +10,43 @@ function DeadlineCell({ task }) {
   const d = daysUntil(task.deadline);
   const date = new Date(task.deadline).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
   return (
-    <div className="flex items-center gap-2">
-      <Clock3 className={`h-4 w-4 ${overdue ? 'text-rose-500' : 'text-ink-400'}`} />
-      <div className="leading-tight">
-        <p className={`text-sm font-medium ${overdue ? 'text-rose-600 dark:text-rose-300' : 'text-ink-800 dark:text-ink-100'}`}>{date}</p>
-        <p className="text-[11px] text-ink-500 dark:text-ink-400">
-          {overdue ? `${Math.abs(d)}d overdue` : d === 0 ? 'Due today' : `in ${d}d`}
-        </p>
-      </div>
+    <div className="leading-tight">
+      <p className={`text-sm font-semibold ${overdue ? 'text-[#B91C1C]' : 'text-[#111827]'}`}>{date}</p>
+      <p className={`text-xs mt-0.5 ${overdue ? 'text-[#B91C1C]' : 'text-[#9CA3AF]'}`}>
+        {overdue ? `${Math.abs(d)}d overdue` : d === 0 ? 'Due today' : `in ${d}d`}
+      </p>
     </div>
   );
 }
 
+function EscBadge({ level }) {
+  if (!level || level === 0)
+    return <span className="chip bg-[#F3F4F6] text-[#6B7280]">L0</span>;
+  if (level === 1)
+    return <span className="chip bg-[#FEF2F2] text-[#DC2626]">L1</span>;
+  if (level === 2)
+    return <span className="chip bg-[#FEE2E2] text-[#991B1B] font-bold">L2</span>;
+  // L3+
+  return <span className="chip bg-[#7F1D1D] text-white font-bold">L{level}</span>;
+}
+
 function SortHeader({ label, dir, onClick }) {
   return (
-    <button onClick={onClick} className="inline-flex items-center gap-1 hover:text-ink-700 dark:hover:text-ink-100">
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1 hover:text-[#111827] transition-colors"
+    >
       {label}
-      {dir === 'asc' ? <ChevronUp className="h-3 w-3" /> : dir === 'desc' ? <ChevronDown className="h-3 w-3" /> : <ArrowUpDown className="h-3 w-3 opacity-60" />}
+      {dir === 'asc'
+        ? <ChevronUp className="h-3 w-3" />
+        : dir === 'desc'
+          ? <ChevronDown className="h-3 w-3" />
+          : <ArrowUpDown className="h-3 w-3 opacity-50" />}
     </button>
   );
 }
+
+const STATUS_FILTERS = ['All', 'Pending', 'Done', 'Delay', 'Issue'];
 
 export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match your filters.', dense = false }) {
   const { search } = useApp();
@@ -65,20 +82,21 @@ export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match y
   const dirFor = (k) => (sort.key === k ? sort.dir : null);
 
   return (
-    <div className="card overflow-hidden animate-fade-in">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-ink-200 dark:border-white/[.06]">
-        <div className="flex items-center gap-2">
-          <Filter className="h-3.5 w-3.5 text-ink-400" />
-          <span className="text-xs font-medium text-ink-500 dark:text-ink-400">Filter</span>
-          <div className="flex flex-wrap gap-1 ml-1">
-            {['All', 'Pending', 'Done', 'Delay', 'Issue'].map((s) => (
+    <div className="fd-card overflow-hidden">
+      {/* Filter row */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[#E5E7EB]">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Filter className="h-3.5 w-3.5 text-[#9CA3AF]" />
+          <span className="text-xs font-medium text-[#6B7280]">Filter</span>
+          <div className="flex flex-wrap gap-1.5 ml-1">
+            {STATUS_FILTERS.map((s) => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
-                className={`text-xs font-medium rounded-md px-2.5 py-1 border transition-colors ${
+                className={`text-xs font-medium rounded-full px-3 py-1 transition-colors ${
                   statusFilter === s
-                    ? 'bg-ink-900 text-white border-ink-900 dark:bg-white dark:text-ink-900 dark:border-white'
-                    : 'border-ink-200 text-ink-600 hover:bg-ink-50 dark:border-white/[.08] dark:text-ink-300 dark:hover:bg-white/[.04]'
+                    ? 'bg-[#1E1B3A] text-white'
+                    : 'border border-[#E5E7EB] text-[#6B7280] hover:bg-gray-50 bg-white'
                 }`}
               >
                 {s}
@@ -86,56 +104,86 @@ export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match y
             ))}
           </div>
         </div>
-        <p className="text-xs text-ink-500 dark:text-ink-400">{filtered.length} of {tasks.length}</p>
+        <p className="text-xs text-[#9CA3AF]">{filtered.length} of {tasks.length}</p>
       </div>
 
+      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr>
-              <th className="table-head"><SortHeader label="Task" dir={dirFor('title')} onClick={() => toggleSort('title')} /></th>
-              <th className="table-head"><SortHeader label="Assignee" dir={dirFor('assignedTo')} onClick={() => toggleSort('assignedTo')} /></th>
-              <th className="table-head"><SortHeader label="Status" dir={dirFor('status')} onClick={() => toggleSort('status')} /></th>
-              <th className="table-head"><SortHeader label="Priority" dir={dirFor('priority')} onClick={() => toggleSort('priority')} /></th>
-              <th className="table-head"><SortHeader label="Deadline" dir={dirFor('deadline')} onClick={() => toggleSort('deadline')} /></th>
-              <th className="table-head text-right">Esc.</th>
+              <th className="fd-table-head">
+                <SortHeader label="Task" dir={dirFor('title')} onClick={() => toggleSort('title')} />
+              </th>
+              <th className="fd-table-head">
+                <SortHeader label="Assignee" dir={dirFor('assignedTo')} onClick={() => toggleSort('assignedTo')} />
+              </th>
+              <th className="fd-table-head">
+                <SortHeader label="Status" dir={dirFor('status')} onClick={() => toggleSort('status')} />
+              </th>
+              <th className="fd-table-head">
+                <SortHeader label="Priority" dir={dirFor('priority')} onClick={() => toggleSort('priority')} />
+              </th>
+              <th className="fd-table-head">
+                <SortHeader label="Deadline" dir={dirFor('deadline')} onClick={() => toggleSort('deadline')} />
+              </th>
+              <th className="fd-table-head text-right">Esc.</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-ink-100 dark:divide-white/[.04]">
+          <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-ink-500 dark:text-ink-400">{emptyText}</td></tr>
+              <tr>
+                <td colSpan={6} className="px-4 py-10 text-center text-sm text-[#9CA3AF]">
+                  {emptyText}
+                </td>
+              </tr>
             )}
             {filtered.map((t) => {
               const assignee = findUser(t.assignedTo);
-              const overdue = isOverdue(t);
+              const overdue  = isOverdue(t);
               return (
                 <tr
                   key={t.id}
                   onClick={() => onOpen?.(t)}
-                  className="row-hover cursor-pointer"
+                  className="fd-row-hover"
                 >
-                  <td className={`table-cell ${dense ? 'py-2' : ''}`}>
+                  {/* Task */}
+                  <td className={`fd-table-cell ${dense ? 'py-2' : ''}`}>
                     <div className="flex items-start gap-2">
                       <div>
-                        <p className="font-medium text-ink-900 dark:text-ink-50">{t.title}</p>
-                        <p className="num text-[11px] text-ink-500 dark:text-ink-400 mt-0.5">{t.id}</p>
+                        <p className="font-semibold text-[#111827]">{t.title}</p>
+                        <p className="num text-[11px] text-[#9CA3AF] mt-0.5">{t.id}</p>
                       </div>
-                      {overdue && <Flame className="h-3.5 w-3.5 text-rose-500 mt-1" />}
+                      {overdue && <Flame className="h-3.5 w-3.5 text-[#DC2626] mt-0.5 shrink-0" />}
                     </div>
                   </td>
-                  <td className="table-cell">
+
+                  {/* Assignee */}
+                  <td className="fd-table-cell">
                     <div className="flex items-center gap-2">
                       <Avatar user={assignee} size="sm" />
-                      <span className="font-medium">{assignee?.name}</span>
+                      <span className="font-medium text-[#374151]">{assignee?.name}</span>
                     </div>
                   </td>
-                  <td className="table-cell"><StatusBadge status={t.status} /></td>
-                  <td className="table-cell"><PriorityBadge priority={t.priority} /></td>
-                  <td className="table-cell"><DeadlineCell task={t} /></td>
-                  <td className="table-cell text-right">
-                    <span className={`chip num ${t.escalationLevel > 0 ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300' : 'bg-ink-100 text-ink-600 dark:bg-white/[.06] dark:text-ink-300'}`}>
-                      L{t.escalationLevel || 0}
-                    </span>
+
+                  {/* Status */}
+                  <td className="fd-table-cell">
+                    <StatusBadge status={t.status} />
+                  </td>
+
+                  {/* Priority */}
+                  <td className="fd-table-cell">
+                    <PriorityBadge priority={t.priority} />
+                  </td>
+
+                  {/* Deadline */}
+                  <td className="fd-table-cell">
+                    <DeadlineCell task={t} />
+                  </td>
+
+                  {/* Escalation */}
+                  <td className="fd-table-cell text-right">
+                    <EscBadge level={t.escalationLevel || 0} />
                   </td>
                 </tr>
               );
