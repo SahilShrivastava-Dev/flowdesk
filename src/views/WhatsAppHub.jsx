@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext.jsx';
-import { findUser, isOverdue } from '../data/mockData.js';
+import { findUser, isOverdue, directReports } from '../data/mockData.js';
 import Avatar from '../components/Avatar.jsx';
-import { MessageCircle, Send, CheckCheck, Clock, AlertCircle, Image, Paperclip } from 'lucide-react';
+import { MessageCircle, Send, CheckCheck, Clock, AlertCircle, Image, Paperclip, Lock } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { isLoggedIn } from '../lib/auth.js';
+import { isLoggedIn, getSavedUser } from '../lib/auth.js';
 
 const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -73,6 +73,21 @@ export default function WhatsAppHub() {
 
   const active  = tasks.find((t) => t.id === activeId);
   const partner = active ? findUser(active.assignedTo) : null;
+
+  // ── Access guard ──────────────────────────────────────────────────────────
+  // Managers can only send WhatsApp messages to their own direct reports.
+  // If the task's assignee reports to someone else, lock the send bar.
+  const loggedInUser = getSavedUser(); // { id, role, name, ... } from JWT session
+  const canSendMessage = useMemo(() => {
+    if (!active || !partner) return false;
+    if (!loggedInUser) return true; // demo mode — no restriction
+    if (loggedInUser.role === 'Admin') return true;
+    if (loggedInUser.role === 'Manager') {
+      // partner.reportingToId must equal the logged-in manager's id
+      return partner.reportingToId === loggedInUser.id;
+    }
+    return false; // Employees never send from this view
+  }, [active, partner, loggedInUser]);
 
   // Build the chat thread from real task activities
   const thread = (active?.activity ?? []).filter(
@@ -254,31 +269,41 @@ export default function WhatsAppHub() {
                 </div>
               )}
 
-              {/* Input bar */}
-              <div className="p-3 border-t border-[#E5E7EB] bg-white flex items-end gap-2 shrink-0">
-                <textarea
-                  rows={1}
-                  className="fd-input flex-1 resize-none min-h-[40px] max-h-24 overflow-y-auto"
-                  placeholder={
-                    session.open
-                      ? `Message ${partner?.name?.split(' ')[0]} on WhatsApp…`
-                      : `Session expired — message will reopen conversation…`
-                  }
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={onKey}
-                />
-                <button
-                  onClick={send}
-                  disabled={!message.trim() || sending}
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#22C55E] text-white
-                             text-sm font-semibold hover:bg-[#16A34A] transition-colors shrink-0
-                             disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Send className="h-4 w-4" />
-                  {sending ? 'Sending…' : 'Send'}
-                </button>
-              </div>
+              {/* Input bar — locked for Managers who don't manage this assignee */}
+              {canSendMessage ? (
+                <div className="p-3 border-t border-[#E5E7EB] bg-white flex items-end gap-2 shrink-0">
+                  <textarea
+                    rows={1}
+                    className="fd-input flex-1 resize-none min-h-[40px] max-h-24 overflow-y-auto"
+                    placeholder={
+                      session.open
+                        ? `Message ${partner?.name?.split(' ')[0]} on WhatsApp…`
+                        : `Session expired — message will reopen conversation…`
+                    }
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={onKey}
+                  />
+                  <button
+                    onClick={send}
+                    disabled={!message.trim() || sending}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#22C55E] text-white
+                               text-sm font-semibold hover:bg-[#16A34A] transition-colors shrink-0
+                               disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Send className="h-4 w-4" />
+                    {sending ? 'Sending…' : 'Send'}
+                  </button>
+                </div>
+              ) : (
+                <div className="p-3 border-t border-[#E5E7EB] bg-[#F9FAFB] flex items-center gap-2.5 shrink-0">
+                  <Lock className="h-4 w-4 text-[#9CA3AF] shrink-0" />
+                  <p className="text-xs text-[#6B7280]">
+                    <span className="font-semibold text-[#374151]">{partner?.name?.split(' ')[0]}</span>
+                    {' '}doesn't report to you — only their direct manager can send WhatsApp messages on this thread.
+                  </p>
+                </div>
+              )}
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-sm text-[#9CA3AF]">

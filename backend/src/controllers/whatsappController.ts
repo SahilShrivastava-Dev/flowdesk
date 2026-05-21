@@ -14,7 +14,7 @@ const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
  */
 export async function sendMessage(req: Request, res: Response): Promise<void> {
   const { taskId, message } = req.body as { taskId: string; message: string };
-  const { userId } = req.user!;
+  const { userId, role } = req.user!;
 
   if (!taskId || !message?.trim()) {
     res.status(400).json({ error: 'taskId and message are required' });
@@ -24,11 +24,21 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
   const task = await prisma.task.findUnique({
     where: { id: taskId },
     include: {
-      assignedTo: { select: { id: true, name: true, phone: true } },
+      assignedTo: { select: { id: true, name: true, phone: true, reportingToId: true } },
     },
   });
 
   if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
+
+  // ── Hierarchy check ────────────────────────────────────────────────────────
+  // Admin can message anyone.
+  // Manager can only message assignees who directly report to them.
+  if (role === 'Manager' && task.assignedTo.reportingToId !== userId) {
+    res.status(403).json({
+      error: 'Forbidden — you can only send WhatsApp messages for tasks assigned to your direct reports',
+    });
+    return;
+  }
 
   const phone = task.assignedTo.phone;
   if (!phone) {

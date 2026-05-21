@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+
+const MAX_ESCALATION_LEVEL = 4;
 import Modal from './Modal.jsx';
 import StatusBadge, { PriorityBadge } from './StatusBadge.jsx';
 import Avatar from './Avatar.jsx';
@@ -104,6 +106,7 @@ export default function TaskDetailsModal({ taskId, onClose }) {
   const { role, activeUser, users, tasks, setTaskStatus, approveTask, retractTask, rejectTask, reassignTask, escalateTask } = useApp();
   const [comment,  setComment]  = useState('');
   const [actioning, setActioning] = useState(null); // 'approve' | 'reject' | 'retract' | 'escalate' | null
+  const escalatingRef = useRef(false); // sync guard — prevents double-click before React re-renders
 
   // Always derive from the live tasks array — never a stale snapshot
   const task = tasks.find((t) => t.id === taskId) ?? null;
@@ -130,7 +133,9 @@ export default function TaskDetailsModal({ taskId, onClose }) {
   //   Nobody   → can escalate a Done or approved task
   const taskIsOpen   = task.status !== 'Done' && !task.approved;
   const canEscalate  =
-    taskIsOpen && (
+    taskIsOpen &&
+    (task.escalationLevel ?? 0) < MAX_ESCALATION_LEVEL &&
+    (
       role === 'Admin' ||
       (role === 'Manager' && isMyReport) ||
       (role === 'Employee' && isMyTask)
@@ -240,9 +245,16 @@ export default function TaskDetailsModal({ taskId, onClose }) {
                   className="fd-btn-secondary border-orange-200 text-orange-700 hover:bg-orange-50 disabled:opacity-60"
                   disabled={!!actioning}
                   onClick={async () => {
+                    // Synchronous ref guard — blocks re-entry before React re-renders the disabled state
+                    if (escalatingRef.current) return;
+                    escalatingRef.current = true;
                     setActioning('escalate');
-                    await escalateTask(task.id, activeUser.id);
-                    setActioning(null);
+                    try {
+                      await escalateTask(task.id, activeUser.id);
+                    } finally {
+                      setActioning(null);
+                      escalatingRef.current = false;
+                    }
                   }}
                 >
                   <ShieldAlert className="h-4 w-4" />

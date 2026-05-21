@@ -411,10 +411,101 @@ FlowDesk is purpose-built for the segment where employees are mobile, on-ground,
 
 ---
 
-## 10. Document Revision
+## 10. Phase 3: AI-Powered Operations (Future Roadmap)
+
+Integrating artificial intelligence can transform FlowDesk from a standard task-tracking CRUD system into a highly intuitive, automated, and "voice-native" operational brain. Since field workers interact using unstructured text, photos, and voice notes, AI plays a crucial role in bridging the gap between raw messaging and structured database states.
+
+### 10.1 AI Features & Deployment Phases
+
+```
+Phase 3.1: Natural Language Core  ──►  Phase 3.2: Multimodal Core  ──►  Phase 3.3: Operations Automation
+· Smart Inbound Chat Parsing           · Voice Note Transcription         · Visual Quality Assurance (Vision)
+· Natural Language Task Creator        · Auto Client Reports              · Dynamic Escalation Advice
+```
+
+#### Phase 3.1: Natural Language Processing (NLP) Core
+* **Smart Inbound WhatsApp Parsing & Intent Extraction:**
+  * **Objective:** Parse conversational updates (e.g., *"Hey sir, completed 1054 and left keys under mat. Going home."*) into clean structured states instead of expecting strict keywords like `TSK-1054 done`.
+  * **AI Task:** LLM extracts Task ID, maps the user's intent (`Done`, `Issue`, `Delay`), and formats a clean audit log summary.
+* **Natural Language Task Creator (Manager-Side):**
+  * **Objective:** Allow managers to type or speak a single sentence to instantly generate a task.
+  * **AI Task:** Converts *"Aarav, please go fix the plumbing leak at Lobby 402 by tomorrow 5pm"* into a structured task creation JSON object, pre-filling the web form.
+
+#### Phase 3.2: Multimodal Audio & Text Core
+* **WhatsApp Voice Note Transcription & Intent Mapping:**
+  * **Objective:** Allow field workers to send a 15-second WhatsApp voice note instead of typing on-screen.
+  * **AI Task:** Native audio processing transcribes the worker's voice, translates regional slang/language to English (if needed), and extracts the task ID and status.
+* **Professional Client Report Generator:**
+  * **Objective:** Automatically translate informal worker comments into clean customer updates.
+  * **AI Task:** Transforms worker slang (*"done with cab. left key under mat. client happy"*) into a polite, branded message (*"Dear Valued Customer, we are pleased to inform you that your cabinet repair is complete..."*).
+
+#### Phase 3.3: Visual Quality Assurance (Vision QA)
+* **Automated Image & Proof of Work Inspection:**
+  * **Objective:** Eliminate manual manager QA reviews for every single task photo.
+  * **AI Task:** Vision LLM reviews the uploaded photo proof and verifies:
+    1. Is the job actually complete (e.g., is the mirror fully installed and mounted)?
+    2. Is the site left clean (no trash, tools, or debris left behind)?
+    3. Are there visible defects or damages?
+  * **Automated Loop:** If the AI flags a messy site, it replies to the worker's WhatsApp: *"It looks like some tools are still on the counter. Please tidy up and upload a new photo to complete the task."*
+
+---
+
+### 10.2 Technical Requirements & APIs
+
+To run this AI layer, we do **not** need massive custom infrastructure. The entire roadmap can be built using serverless AI APIs, keeping deployment costs and maintenance near zero.
+
+#### 1. Recommended API & Models
+* **Google Gemini API** (using the `@google/genai` or `@google/vertexai` SDK) is recommended due to its native multi-modality (can process text, audio, images, and video in a single call), large context window, sub-second speed, and extremely low pricing.
+* **Model Selection:**
+  * **Gemini 2.5 Flash / Gemini 2.0 Flash:** Best for general-purpose text parsing, voice-to-text, and image verification (multimodal). It is blazing fast and cost-effective.
+  * **Gemini 2.5 Flash-Lite:** Ideal for low-latency, high-volume text parsing.
+
+#### 2. Dependencies & Integration Points
+* **Node.js SDK:** Install `@google/genai` on the Express backend.
+* **Credentials:** Add a single `GEMINI_API_KEY` to your environment variables (or save it securely in your Secret Vault).
+* **Audio Parsing Library (Optional):** WhatsApp voice notes are sent as `.ogg` files. The backend will require `fluent-ffmpeg` or standard API encoding to pass the audio data directly to Gemini's multimodal endpoint.
+
+---
+
+### 10.3 "How Much API?" — Volume & Cost Estimations
+
+Because LLM API consumption is priced per **million tokens** (roughly 750,000 words), running an operations system like FlowDesk is extremely affordable.
+
+#### API Call Frequency (Per Workflow)
+* **Inbound WhatsApp Text:** 1 API call per message (Gemini Flash processes the message and returns structured JSON).
+* **Inbound WhatsApp Voice Note:** 1 API call per voice file (Gemini Flash directly ingests the audio and returns JSON).
+* **Inbound Task Photo Proof:** 1 API call per task completion photo.
+* **Manager Task Creation:** 1 API call (triggered only when using the natural language prompt bar).
+* **Client Report Drafting:** 1 API call per completion event.
+
+#### Sample Volume & Monthly Cost Calculation
+Let's calculate the API usage for a **typical medium-sized client deployment**:
+* **Active Workers:** 50
+* **Tasks per Worker per Day:** 4
+* **Total Tasks per Day:** 200 tasks
+* **Inbound Messages/Replies per Day:** 250 WhatsApp messages (text, photos, or voice notes)
+* **API Calls per Day:** ~300 calls
+
+##### Gemini 2.5 Flash Pricing Model:
+* **Input Price:** $0.075 / million tokens (1k tokens $\approx$ 1 long chat thread + 1 task details)
+* **Output Price:** $0.30 / million tokens (Output is small JSON, $\approx$ 200 tokens)
+* **Average Cost per Call:** Less than **$0.0001** (fraction of a cent)
+
+##### Estimated Cost Breakdown:
+* **Daily Calls:** 300 calls $\approx$ 300,000 input tokens + 60,000 output tokens.
+* **Daily Cost:** $(0.3 \times 0.075) + (0.06 \times 0.30) = $0.0225 + $0.018 \approx$ **$0.04 (4 cents) per day**.
+* **Monthly Cost:** $0.04 \times 30 =$ **$1.20 per month**!
+
+Even if workers upload high-resolution completion photos (which consume more tokens per image), the total monthly API bill for a client with 50 active field workers will be **less than $5.00 to $10.00 / month**, making AI integration exceptionally viable and highly profitable for SaaS margins.
+
+---
+
+## 11. Document Revision
 
 | Version | Date | Changes |
 |---|---|---|
 | 0.1 | May 2026 | Initial architecture draft |
 | 1.0 | May 2026 | V1 feature complete: auth, tasks, WhatsApp, escalation, timeline, tracker |
+| 2.0 | May 2026 | Phase 3 Roadmap added: Detailed AI-powered capabilities, API requirements, and cost estimates |
+
 

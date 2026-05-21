@@ -239,6 +239,12 @@ export async function escalateTask(req: Request, res: Response): Promise<void> {
   });
   if (!existing) { res.status(404).json({ error: 'Not found' }); return; }
 
+  const MAX_ESCALATION_LEVEL = 4;
+  if (existing.escalationLevel >= MAX_ESCALATION_LEVEL) {
+    res.status(400).json({ error: `Already at maximum escalation level (L${MAX_ESCALATION_LEVEL})` });
+    return;
+  }
+
   const escalator = await prisma.user.findUnique({
     where: { id: userId },
     select: { name: true, role: true },

@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { ArrowUpDown, ChevronUp, ChevronDown, Filter, Flame } from 'lucide-react';
+import { ArrowUpDown, ChevronUp, ChevronDown, Filter, Flame, Download, Check } from 'lucide-react';
 import { findUser, isOverdue, daysUntil } from '../data/mockData.js';
 import StatusBadge, { PriorityBadge } from './StatusBadge.jsx';
 import Avatar from './Avatar.jsx';
 import { useApp } from '../context/AppContext.jsx';
+import { exportTasksCSV } from '../lib/exportCSV.js';
 
 function DeadlineCell({ task }) {
   const overdue = isOverdue(task);
@@ -52,6 +53,7 @@ export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match y
   const { search } = useApp();
   const [statusFilter, setStatusFilter] = useState('All');
   const [sort, setSort] = useState({ key: 'deadline', dir: 'asc' });
+  const [exported, setExported] = useState(false); // flash feedback after download
 
   const filtered = useMemo(() => {
     let list = tasks;
@@ -104,7 +106,31 @@ export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match y
             ))}
           </div>
         </div>
-        <p className="text-xs text-[#9CA3AF]">{filtered.length} of {tasks.length}</p>
+
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-[#9CA3AF]">{filtered.length} of {tasks.length}</p>
+
+          {/* Export CSV */}
+          <button
+            onClick={() => {
+              exportTasksCSV(filtered);
+              setExported(true);
+              setTimeout(() => setExported(false), 2000);
+            }}
+            disabled={filtered.length === 0}
+            title="Export visible tasks to CSV"
+            className={`inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed ${
+              exported
+                ? 'bg-[#DCFCE7] border-[#86EFAC] text-[#166534]'
+                : 'bg-white border-[#E5E7EB] text-[#374151] hover:bg-[#F9FAFB] hover:border-[#D1D5DB]'
+            }`}
+          >
+            {exported
+              ? <><Check className="h-3.5 w-3.5" /> Exported!</>
+              : <><Download className="h-3.5 w-3.5" /> Export CSV</>
+            }
+          </button>
+        </div>
       </div>
 
       {/* Table */}

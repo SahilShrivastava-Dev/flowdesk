@@ -239,19 +239,32 @@ export function AppProvider({ children, loggedInUser }) {
     }
   }, [users, optimistic, updateTask]);
 
+  const MAX_ESCALATION_LEVEL = 4;
+
   const escalateTask = useCallback((id, byUserId) => {
     if (usingApi) {
-      setTasks((prev) => prev.map((t) => t.id === id ? { ...t, escalationLevel: (t.escalationLevel || 0) + 1 } : t));
+      setTasks((prev) => prev.map((t) => {
+        if (t.id !== id) return t;
+        if ((t.escalationLevel || 0) >= MAX_ESCALATION_LEVEL) return t; // hard cap
+        return { ...t, escalationLevel: (t.escalationLevel || 0) + 1 };
+      }));
       api.post(`/api/tasks/${id}/escalate`).then((updated) => {
         if (updated) setTasks((prev) => prev.map((t) => t.id === id ? normaliseTask(updated) : t));
       }).catch(fetchTasks);
     } else {
       setTasks((prev) => prev.map((t) => {
         if (t.id !== id) return t;
+        if ((t.escalationLevel || 0) >= MAX_ESCALATION_LEVEL) return t; // hard cap
+        const newLevel = (t.escalationLevel || 0) + 1;
         return {
           ...t,
-          escalationLevel: (t.escalationLevel || 0) + 1,
-          activity: [...(t.activity || []), { at: new Date().toISOString(), by: byUserId, type: 'escalation', text: 'Manually escalated' }],
+          escalationLevel: newLevel,
+          activity: [...(t.activity || []), {
+            at: new Date().toISOString(),
+            by: byUserId,
+            type: 'escalation',
+            text: `Manually escalated to L${newLevel} by ${byUserId}`,
+          }],
         };
       }));
     }
