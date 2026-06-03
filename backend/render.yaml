@@ -3,7 +3,7 @@ services:
     name: flowdesk-api
     runtime: node
     rootDir: backend
-    buildCommand: npm install && npx prisma generate && npm run build
+    buildCommand: npm install --include=dev && npx prisma generate && npm run build
     startCommand: node dist/index.js
     healthCheckPath: /api/health
     envVars:
