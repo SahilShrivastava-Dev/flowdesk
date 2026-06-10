@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { ChevronRight, ChevronDown, ChevronLeft, Calendar } from 'lucide-react';
+import { ChevronRight, ChevronDown, ChevronLeft, Calendar, Flame } from 'lucide-react';
 
 // ─── Priority colour config ───────────────────────────────────────────────────
 const PRIORITY = {
@@ -99,6 +99,8 @@ export default function EscalationsView({ onOpenTask }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   // Which manager rows are expanded in the left panel
   const [expandedMgr, setExpandedMgr] = useState(new Set());
+  // Filter Gantt bars to escalated tasks only
+  const [escalatedOnly, setEscalatedOnly] = useState(false);
 
   // Build hierarchy
   const managers   = useMemo(() => users.filter(u => u.role === 'Manager' || u.role === 'Admin'), [users]);
@@ -189,11 +191,14 @@ export default function EscalationsView({ onOpenTask }) {
         tasks: (tasksByUser[u.id] ?? []).filter(t => {
           const s = new Date(t.createdAt);
           const e = new Date(t.deadline);
-          return e >= viewStart && s <= viewEnd;
+          const inRange = e >= viewStart && s <= viewEnd;
+          if (!inRange) return false;
+          if (escalatedOnly && !(t.escalationLevel > 0)) return false;
+          return true;
         }),
       }))
       .filter(r => r.tasks.length > 0);
-  }, [selectedIds, users, tasksByUser, viewStart, viewEnd]);
+  }, [selectedIds, users, tasksByUser, viewStart, viewEnd, escalatedOnly]);
 
   const monthLabel = new Date(viewYear, viewMonth, 1)
     .toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -335,11 +340,24 @@ export default function EscalationsView({ onOpenTask }) {
               Today
             </button>
           </div>
-          <div className="flex items-center gap-2 text-xs text-[#9CA3AF]">
-            <Calendar className="h-3.5 w-3.5" />
-            {timelineRows.length > 0
-              ? `${timelineRows.length} people · ${timelineRows.reduce((a, r) => a + r.tasks.length, 0)} tasks`
-              : 'Select people from the left panel'}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setEscalatedOnly(v => !v)}
+              className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                escalatedOnly
+                  ? 'bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C]'
+                  : 'bg-white border-[#E5E7EB] text-[#6B7280] hover:bg-[#F9FAFB]'
+              }`}
+            >
+              <Flame className="h-3.5 w-3.5" />
+              Escalated only
+            </button>
+            <div className="flex items-center gap-2 text-xs text-[#9CA3AF]">
+              <Calendar className="h-3.5 w-3.5" />
+              {timelineRows.length > 0
+                ? `${timelineRows.length} people · ${timelineRows.reduce((a, r) => a + r.tasks.length, 0)} tasks`
+                : 'Select people from the left panel'}
+            </div>
           </div>
         </div>
 

@@ -47,7 +47,7 @@ function SortHeader({ label, dir, onClick }) {
   );
 }
 
-const STATUS_FILTERS = ['All', 'Pending', 'Done', 'Delay', 'Issue'];
+const STATUS_FILTERS = ['All', 'Pending', 'Done', 'Delay', 'Issue', 'Escalated'];
 
 export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match your filters.', dense = false }) {
   const { search } = useApp();
@@ -57,7 +57,11 @@ export default function TaskTable({ tasks, onOpen, emptyText = 'No tasks match y
 
   const filtered = useMemo(() => {
     let list = tasks;
-    if (statusFilter !== 'All') list = list.filter((t) => t.status === statusFilter);
+    if (statusFilter === 'Escalated') {
+      list = list.filter((t) => (t.escalationLevel ?? 0) > 0);
+    } else if (statusFilter !== 'All') {
+      list = list.filter((t) => t.status === statusFilter);
+    }
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(

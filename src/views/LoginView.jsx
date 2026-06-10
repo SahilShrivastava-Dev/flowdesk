@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { api }         from '../lib/api';
 import { saveSession } from '../lib/auth';
@@ -9,6 +9,12 @@ const IS_DEMO = !import.meta.env.VITE_API_URL;
 export default function LoginView({ onLogin }) {
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
+
+  // Pre-warm the Render server the moment the login page appears so it's
+  // ready (or much closer to ready) by the time the user finishes logging in.
+  useEffect(() => {
+    if (!IS_DEMO) api.warmup();
+  }, []);
   const [showPwd,  setShowPwd]  = useState(false);
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);

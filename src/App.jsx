@@ -293,7 +293,7 @@ function UserDropdown({ user, onLogout, onRoleSwitch }) {
 
 // ── Main shell ────────────────────────────────────────────────────────────────
 function FlowDeskShell({ onLogout }) {
-  const { activeUser, role, setRole, theme, toggleTheme, unreadCount } = useApp();
+  const { activeUser, role, setRole, theme, toggleTheme, unreadCount, tasksLoading } = useApp();
   const [activeTab, setActiveTab]   = useState(() => DEFAULT_TAB[role] || 'Dashboard');
   const [openTaskId, setOpenTaskId] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -436,6 +436,16 @@ function FlowDeskShell({ onLogout }) {
           </div>
         </nav>
       </div>
+
+      {/* ── Server warm-up banner ────────────────────────────────────── */}
+      {tasksLoading && (
+        <div className="shrink-0 mx-4 mt-2">
+          <div className="max-w-[1400px] mx-auto flex items-center gap-2.5 px-4 py-2 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] text-[#92400E] text-xs font-medium">
+            <span className="w-3.5 h-3.5 border-2 border-[#F59E0B]/40 border-t-[#F59E0B] rounded-full animate-spin shrink-0" />
+            Server is waking up — data will appear in a few seconds…
+          </div>
+        </div>
+      )}
 
       {/* ── Page Content ─────────────────────────────────────────────── */}
       <main className="flex-1 min-h-0 overflow-y-auto px-4 py-5">

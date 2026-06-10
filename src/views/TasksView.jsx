@@ -23,10 +23,11 @@ export default function TasksView({ onOpenTask }) {
       ? 'Tasks across your team — filter, sort, click any row to inspect or reassign.'
       : 'Filter, sort, and click any row to inspect details, escalate, or reassign.';
 
-  const done    = list.filter((t) => t.status === 'Done').length;
-  const pending = list.filter((t) => t.status === 'Pending').length;
-  const delayed = list.filter((t) => t.status === 'Delay').length;
-  const issues  = list.filter((t) => t.status === 'Issue').length;
+  const done      = list.filter((t) => t.status === 'Done').length;
+  const pending   = list.filter((t) => t.status === 'Pending').length;
+  const delayed   = list.filter((t) => t.status === 'Delay').length;
+  const issues    = list.filter((t) => t.status === 'Issue').length;
+  const escalated = list.filter((t) => (t.escalationLevel ?? 0) > 0).length;
 
   return (
     <div className="space-y-4">
@@ -45,10 +46,11 @@ export default function TasksView({ onOpenTask }) {
       {/* Quick-stat pills */}
       <div className="flex flex-wrap gap-2">
         {[
-          { label: 'Done',    value: done,    bg: '#DCFCE7', text: '#166534' },
-          { label: 'Pending', value: pending, bg: '#EFF6FF', text: '#1D4ED8' },
-          { label: 'Delayed', value: delayed, bg: '#FFFBEB', text: '#B45309' },
-          { label: 'Issues',  value: issues,  bg: '#FEF2F2', text: '#B91C1C' },
+          { label: 'Done',      value: done,      bg: '#DCFCE7', text: '#166534' },
+          { label: 'Pending',   value: pending,   bg: '#EFF6FF', text: '#1D4ED8' },
+          { label: 'Delayed',   value: delayed,   bg: '#FFFBEB', text: '#B45309' },
+          { label: 'Issues',    value: issues,    bg: '#FEF2F2', text: '#B91C1C' },
+          { label: 'Escalated', value: escalated, bg: '#FEE2E2', text: '#991B1B' },
         ].map(({ label, value, bg, text }) => (
           <span
             key={label}

@@ -128,6 +128,7 @@ export function AppProvider({ children, loggedInUser }) {
   const [tasks, setTasks] = useState(() =>
     usingApi ? [] : initialTasks.map(normaliseTask)
   );
+  const [tasksLoading, setTasksLoading] = useState(usingApi);
   const pollingRef = useRef(null);
 
   const fetchTasks = useCallback(async () => {
@@ -136,6 +137,8 @@ export function AppProvider({ children, loggedInUser }) {
       if (data) setTasks(data.map(normaliseTask));
     } catch (err) {
       console.error('[AppContext] fetchTasks', err);
+    } finally {
+      setTasksLoading(false);
     }
   }, []);
 
@@ -312,7 +315,7 @@ export function AppProvider({ children, loggedInUser }) {
     theme, toggleTheme,
     role, setRole, activeUser,
     users, addUser, updateUser, deleteUser,
-    tasks, addTask, updateTask, setTaskStatus, approveTask, retractTask, rejectTask, reassignTask, escalateTask,
+    tasks, tasksLoading, addTask, updateTask, setTaskStatus, approveTask, retractTask, rejectTask, reassignTask, escalateTask,
     notifications, markAllRead, unreadCount, notifLastSeen,
     search, setSearch,
   };

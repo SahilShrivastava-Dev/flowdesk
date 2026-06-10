@@ -1,0 +1,117 @@
+@startuml FlowDesk High-Level System Architecture
+!theme cerulean-outline
+
+header FlowDesk Evolution: V1 (Current) to V3 (AI Roadmap)
+title FlowDesk - High-Level System Diagram
+
+' Styling definitions for Current vs. Future
+skinparam rectangle {
+    BackgroundColor<<Current>> #E2F0D9
+    BorderColor<<Current>> #385723
+    BackgroundColor<<Future>> #FFF2CC
+    BorderColor<<Future>> #D54100
+    BorderStyle<<Future>> dashed
+}
+
+skinparam database {
+    BackgroundColor<<Current>> #D9E1F2
+    BorderColor<<Current>> #305496
+    BackgroundColor<<Future>> #FFF2CC
+    BorderColor<<Future>> #D54100
+    BorderStyle<<Future>> dashed
+}
+
+legend right
+  |= Color |= Status |= Description |
+  | <back:#E2F0D9>   </back> | V1 (Current) | Active in production-ready V1 stack |
+  | <back:#FFF2CC>   </back> | V2-V3 (Planned) | Target transition & AI roadmap |
+endlegend
+
+' --- CLIENT BROWSER BOX ---
+rectangle "CLIENT BROWSER" as ClientBox #LightBlue {
+    rectangle "React SPA (Vite + Tailwind CSS)\n" as ReactSPA <<Current>> {
+        rectangle "Admin Dashboard · Manager Dashboard · Employee Dashboard" as Dashboards
+        rectangle "Tasks · Team · Timeline · Tracker · Analytics" as Modules
+    }
+    rectangle "Client-Facing Portal\n(Task tracking without logins)" as ClientPortal <<Future>> #Gold
+}
+
+' --- BACKEND SERVER BOX ---
+rectangle "BACKEND (Node.js / Express / TypeScript)" as BackendBox #Orange {
+    
+    rectangle "Routes / Endpoints" as RoutesBox {
+        rectangle "/api/auth  ·  /api/tasks  ·  /api/users\n/api/notifications  ·  /api/whatsapp  ·  /api/webhook" as APIRoutes <<Current>>
+        rectangle "Rate Limiter &\nHMAC Signature Verifier" as SecurityMiddleware <<Future>> #LightPink
+    }
+    
+    rectangle "Core Services & Workers" as ServicesBox {
+        rectangle "WhatsApp Service\n(Meta Graph API)" as WAService <<Current>>
+        rectangle "Media Service\n(Cloudinary)" as MediaService <<Current>>
+        rectangle "Escalation Cron\n(node-cron 15m)" as EscalationCron <<Current>>
+        
+        ' Future Services
+        rectangle "WebSocket Server\n(Socket.io)" as SocketServer <<Future>>
+        rectangle "Queue Processors\n(BullMQ)" as QueueProcessor <<Future>>
+        rectangle "Gemini AI Engine\n(Intent & Image QA)" as AIEngine <<Future>> #Yellow
+    }
+}
+
+' --- DATABASE LAYER BOX ---
+rectangle "DATABASE" as DatabaseBox #MediumSeaGreen {
+    database "Neon (PostgreSQL Serverless)\n" as Postgres <<Current>> {
+        rectangle "Users · Tasks · Activities" as PostgresTables
+    }
+    
+    ' Future Caching & Queue Store
+    database "Redis (In-Memory Store)\n" as Redis <<Future>> {
+        rectangle "Job Queue (BullMQ Data)\nMetrics Cache\nRate Limit Keys" as RedisStores
+    }
+}
+
+' --- EXTERNAL INTEGRATIONS ---
+rectangle "EXTERNAL INTEGRATIONS" as ExtBox #F2F2F2 {
+    rectangle "Meta WhatsApp Cloud API\n(Send & Receive)" as MetaAPI #MediumPurple
+    rectangle "Cloudinary\n(Media CDN)" as Cloudinary #LightSalmon
+    rectangle "ngrok / Render\n(Webhook Tunnel)" as WebhookTunnel #LightSkyBlue
+    rectangle "Google Gemini API\n(LLM & Multimodal AI)" as GeminiAPI <<Future>> #Yellow
+}
+
+' --- INTERFACES & CONNECTORS ---
+
+' 1. Client to Backend connection
+ReactSPA --> SecurityMiddleware : " HTTPS REST API (JWT auth)"
+ClientPortal ..> SecurityMiddleware : " HTTPS REST API"
+ReactSPA <..> SocketServer : " WebSockets (Real-time events)" <<Future>>
+
+' 2. Backend Routing to Services
+SecurityMiddleware --> APIRoutes
+APIRoutes --> WAService
+APIRoutes --> MediaService
+APIRoutes ..> QueueProcessor : " Enqueue webhook tasks" <<Future>>
+QueueProcessor ..> WAService : " Process background jobs" <<Future>>
+
+' AI Engine Integration
+WAService ..> AIEngine : " Parse unstructured input & images" <<Future>>
+APIRoutes ..> AIEngine : " Generate task JSON" <<Future>>
+AIEngine ..> GeminiAPI : " API request (Gemini 2.5 Flash)" <<Future>>
+
+' 3. Backend to Databases
+APIRoutes --> Postgres : " Prisma ORM"
+WAService --> Postgres : " Prisma ORM"
+EscalationCron --> Postgres : " Prisma ORM"
+
+' Future Backend to Redis
+SecurityMiddleware ..> Redis : " Track rate limits" <<Future>>
+QueueProcessor <..> Redis : " Retrieve queue data" <<Future>>
+WAService ..> Redis : " Cache metrics & publish events" <<Future>>
+SocketServer <..> Redis : " Pub/Sub communication" <<Future>>
+
+' 4. Services to External Integrations
+WAService --> MetaAPI : " Send Templates / Messages"
+MediaService --> Cloudinary : " Store media attachments"
+
+' Webhook Loop
+MetaAPI --> WebhookTunnel : " Inbound message webhook"
+WebhookTunnel --> APIRoutes : " Forward webhook payload"
+
+@enduml
