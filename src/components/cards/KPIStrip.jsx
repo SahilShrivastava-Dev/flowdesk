@@ -131,48 +131,35 @@ export default function KPIStrip({ tasks }) {
       <Tile
         label="Active Tasks"
         value={total}
-        delta={12}
         icon={Activity}
         iconBg="#EDE9FE"
         iconColor="#7C3AED"
-        spark={[8, 10, 9, 12, 11, 14, 13, 16, total]}
-        sparkColor="#7C3AED"
         kicker={`${tasks.filter((t) => t.status !== 'Done').length} in motion`}
       />
       <Tile
         label="Completion Rate"
         value={completion}
         suffix="%"
-        delta={4}
         icon={CheckCircle2}
         iconBg="#CCFBF1"
         iconColor="#0D9488"
-        spark={[42, 48, 55, 52, 60, 64, 68, 72, completion]}
-        sparkColor="#0D9488"
         kicker={`${done} of ${total} closed`}
       />
       <Tile
         label="On-Time Delivery"
         value={onTimePct}
         suffix="%"
-        delta={onTimePct >= 75 ? 6 : -3}
         icon={Timer}
         iconBg="#DBEAFE"
         iconColor="#1D4ED8"
-        spark={[68, 70, 74, 72, 78, 80, 76, 82, onTimePct]}
-        sparkColor="#1D4ED8"
         kicker={`avg cycle ${avgCycle.toFixed(1)} d`}
       />
       <Tile
         label="Overdue / Escalated"
         value={overdueCount}
-        delta={-8}
-        deltaRed
         icon={ShieldAlert}
         iconBg="#FEF3C7"
         iconColor="#D97706"
-        spark={[6, 5, 7, 4, 5, 3, 4, 2, overdueCount]}
-        sparkColor="#EF4444"
         kicker={`${escalatedCount} escalated`}
       />
     </div>

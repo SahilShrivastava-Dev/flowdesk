@@ -14,7 +14,8 @@ function StatRow({ color, label, pct }) {
 }
 
 export default function ProjectCompletedCard({ tasks }) {
-  const total       = tasks.length || 1;
+  const count       = tasks.length;            // real total (may be 0)
+  const total       = count || 1;              // divisor guard to avoid /0
   const done        = tasks.filter((t) => t.status === 'Done').length;
   const inProgress  = tasks.filter((t) => t.status === 'Pending' || t.status === 'Delay').length;
   const backlog     = tasks.filter((t) => t.status === 'Issue' || t.escalationLevel > 0).length;
@@ -36,7 +37,7 @@ export default function ProjectCompletedCard({ tasks }) {
         <h2 className="text-sm font-bold text-[#111827]">Project Completed</h2>
         <p className="text-xs text-[#9CA3AF]">
           Total project{' '}
-          <span className="num font-semibold text-[#111827]">{total}</span>
+          <span className="num font-semibold text-[#111827]">{count}</span>
         </p>
       </div>
 

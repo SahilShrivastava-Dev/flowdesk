@@ -120,11 +120,13 @@ export default function LoginView({ onLogin }) {
           </button>
         </form>
 
-        <p className="text-[11px] text-[#9CA3AF] text-center">
-          Demo:{' '}
-          <span className="font-mono text-[#374151]">aarav@flowdesk.io</span>
-          {' '}/ <span className="font-mono text-[#374151]">flowdesk123</span>
-        </p>
+        {IS_DEMO && (
+          <p className="text-[11px] text-[#9CA3AF] text-center">
+            Demo:{' '}
+            <span className="font-mono text-[#374151]">aarav@flowdesk.io</span>
+            {' '}/ <span className="font-mono text-[#374151]">flowdesk123</span>
+          </p>
+        )}
       </div>
     </div>
   );

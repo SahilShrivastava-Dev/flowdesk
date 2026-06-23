@@ -5,7 +5,8 @@ import {
   Area, AreaChart,
 } from 'recharts';
 import { useApp } from '../context/AppContext.jsx';
-import { findUser, isOverdue } from '../data/mockData.js';
+import { isOverdue } from '../data/mockData.js';
+import { weeklyActivity } from '../lib/analytics.js';
 import Avatar from '../components/Avatar.jsx';
 
 const STATUS_COLORS = {
@@ -15,18 +16,11 @@ const STATUS_COLORS = {
   Issue:   '#EF4444',
 };
 
-const TREND_DATA = [
-  { day: 'Mon', closed: 2 },
-  { day: 'Tue', closed: 4 },
-  { day: 'Wed', closed: 3 },
-  { day: 'Thu', closed: 6 },
-  { day: 'Fri', closed: 5 },
-  { day: 'Sat', closed: 4 },
-  { day: 'Sun', closed: 7 },
-];
-
 export default function AnalyticsView() {
   const { tasks, users } = useApp();
+
+  // Completion trend — real tasks closed per day, last 7 days
+  const trendData = useMemo(() => weeklyActivity(tasks), [tasks]);
 
   // Tasks by status for donut
   const statusData = useMemo(() => {
@@ -76,7 +70,7 @@ export default function AnalyticsView() {
         <p className="text-xs font-semibold uppercase tracking-widest text-[#9CA3AF]">Analytics</p>
         <h2 className="text-xl font-bold text-[#111827] mt-0.5">Operational health</h2>
         <p className="text-sm text-[#6B7280] mt-0.5">
-          Throughput, distribution, and trend across the last six weeks.
+          Throughput, distribution, and trend across the past week.
         </p>
       </div>
 
@@ -168,7 +162,7 @@ export default function AnalyticsView() {
         <div className="h-[220px]">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
-              data={TREND_DATA}
+              data={trendData}
               margin={{ top: 4, right: 8, left: -20, bottom: 0 }}
             >
               <defs>

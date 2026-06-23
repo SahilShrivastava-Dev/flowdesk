@@ -259,8 +259,8 @@ function UserDropdown({ user, onLogout, onRoleSwitch }) {
           {initials}
         </div>
         <div className="hidden sm:block text-left">
-          <p className="text-xs font-semibold text-[#111827] leading-none">{user?.name || 'Aarav M'}</p>
-          <p className="text-[10px] text-[#9CA3AF] leading-none mt-0.5">{user?.email || 'aarav@flowdesk.io'}</p>
+          <p className="text-xs font-semibold text-[#111827] leading-none">{user?.name || 'User'}</p>
+          <p className="text-[10px] text-[#9CA3AF] leading-none mt-0.5">{user?.email || ''}</p>
         </div>
         <ChevronDown size={14} className={`text-[#9CA3AF] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -504,7 +504,7 @@ function FlowDeskShell({ onLogout }) {
 
           {/* Footer */}
           <p className="mt-10 text-center text-xs text-[#9CA3AF]">
-            © FlowDesk · WhatsApp Task Operations · demo build
+            © {ORG_NAME} · WhatsApp Task Operations
           </p>
         </div>
       </main>
