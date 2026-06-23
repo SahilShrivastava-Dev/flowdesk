@@ -248,3 +248,7 @@ body {
 }
 .dark .recharts-text { fill: #7c8597 !important; }
 .dark .recharts-cartesian-grid line { stroke: #242a36 !important; }
+/* Radial/donut track (RadialBarChart background sector) renders as an SVG
+   fill attribute, so it can't be reached by class overrides — target it here */
+.dark .recharts-radial-bar-background-sector { fill: #232834 !important; }
+.dark .recharts-pie-sector path[fill="#F3F4F6"] { fill: #232834 !important; }
