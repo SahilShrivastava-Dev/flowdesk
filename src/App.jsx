@@ -47,7 +47,6 @@ const NAV_BY_ROLE = {
 };
 
 const DEFAULT_TAB = { Admin: 'Dashboard', Manager: 'Dashboard', Employee: 'MyDay' };
-const ROLES = ['Admin', 'Manager', 'Employee'];
 
 // ── Search overlay ────────────────────────────────────────────────────────────
 function SearchOverlay({ onClose }) {
@@ -230,7 +229,7 @@ function NotifPanel({ onClose, onNavigate, onOpenTask }) {
 }
 
 // ── User dropdown ─────────────────────────────────────────────────────────────
-function UserDropdown({ user, onLogout, onRoleSwitch }) {
+function UserDropdown({ user, onLogout }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const { role } = useApp();
@@ -241,7 +240,7 @@ function UserDropdown({ user, onLogout, onRoleSwitch }) {
     return () => document.removeEventListener('mousedown', fn);
   }, []);
 
-  const initials = user?.name?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'AM';
+  const initials = user?.name?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'U';
   const colors = {
     Admin:    'from-fuchsia-500 to-purple-600',
     Manager:  'from-rose-500 to-orange-500',
@@ -266,29 +265,22 @@ function UserDropdown({ user, onLogout, onRoleSwitch }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-52 bg-white border border-[#E5E7EB] rounded-2xl shadow-xl z-50 overflow-hidden animate-pop-in">
+        <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-[#E5E7EB] rounded-2xl shadow-xl z-50 overflow-hidden animate-pop-in">
           <div className="px-4 py-3 border-b border-[#F3F4F6]">
-            <p className="text-[10px] font-bold tracking-widest uppercase text-[#9CA3AF]">Switch Role</p>
+            <p className="text-sm font-semibold text-[#111827] truncate">{user?.name || 'User'}</p>
+            <p className="text-[11px] text-[#9CA3AF] truncate mt-0.5">{user?.email || ''}</p>
+            {role && (
+              <span className="inline-flex items-center mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[#EDE9FE] text-[#6D28D9]">
+                {role}
+              </span>
+            )}
           </div>
-          {ROLES.map((r) => (
-            <button
-              key={r}
-              onClick={() => { onRoleSwitch(r); setOpen(false); }}
-              className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors ${
-                role === r ? 'bg-[#1E1B3A] text-white' : 'text-[#374151] hover:bg-gray-50'
-              }`}
-            >
-              {r} view
-            </button>
-          ))}
-          <div className="border-t border-[#F3F4F6]">
-            <button
-              onClick={() => { setOpen(false); onLogout(); }}
-              className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#B91C1C] hover:bg-red-50 transition-colors"
-            >
-              <LogOut size={14} /> Sign out
-            </button>
-          </div>
+          <button
+            onClick={() => { setOpen(false); onLogout(); }}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#B91C1C] hover:bg-red-50 transition-colors"
+          >
+            <LogOut size={14} /> Sign out
+          </button>
         </div>
       )}
     </div>
@@ -297,7 +289,7 @@ function UserDropdown({ user, onLogout, onRoleSwitch }) {
 
 // ── Main shell ────────────────────────────────────────────────────────────────
 function FlowDeskShell({ onLogout }) {
-  const { activeUser, role, setRole, theme, toggleTheme, unreadCount, tasksLoading } = useApp();
+  const { activeUser, role, theme, toggleTheme, unreadCount, tasksLoading } = useApp();
   const [activeTab, setActiveTab]   = useState(() => DEFAULT_TAB[role] || 'Dashboard');
   const [openTaskId, setOpenTaskId] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -435,7 +427,6 @@ function FlowDeskShell({ onLogout }) {
             <UserDropdown
               user={activeUser}
               onLogout={onLogout}
-              onRoleSwitch={(r) => setRole(r)}
             />
           </div>
         </nav>

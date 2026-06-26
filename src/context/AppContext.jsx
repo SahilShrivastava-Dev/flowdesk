@@ -122,8 +122,13 @@ export function AppProvider({ children, loggedInUser }) {
     }
   }, []);
 
+  // API mode: the active user IS the authenticated account.
+  // Demo mode: map the selected role to its canonical seed user.
   const activeUser = useMemo(
-    () => users.find((u) => u.id === ROLE_TO_USER[role]) ?? loggedInUser ?? users[0],
+    () =>
+      usingApi
+        ? users.find((u) => u.id === loggedInUser?.id) ?? loggedInUser ?? users[0]
+        : users.find((u) => u.id === ROLE_TO_USER[role]) ?? loggedInUser ?? users[0],
     [role, users, loggedInUser]
   );
 
