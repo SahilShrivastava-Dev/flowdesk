@@ -35,6 +35,7 @@ export const DELIVERY_LABEL = {
 /** Human explanation of why a message ended up on a task. Shown on hover. */
 export const ATTRIBUTION_LABEL = {
   explicit_ref:     'They named this task',
+  reply_context:    'They replied to a message about this task',
   list_reply:       'They picked it from a list',
   single_open_task: 'Their only open task',
   recent_context:   'Follow-up to the previous message',
@@ -42,8 +43,14 @@ export const ATTRIBUTION_LABEL = {
   none:             'Not linked to a task',
 };
 
-/** Attributions where a human actually said which task this is about. */
-const STATED_BY_A_HUMAN = ['explicit_ref', 'list_reply', 'manual'];
+/**
+ * Attributions where a human actually said which task this is about.
+ *
+ * `reply_context` belongs here: tapping a template button, or swipe-replying to
+ * a message, points at one specific task as deliberately as typing its number.
+ * It is not the inference that `recent_context` is.
+ */
+const STATED_BY_A_HUMAN = ['explicit_ref', 'reply_context', 'list_reply', 'manual'];
 
 /**
  * Should this message display its task chip?

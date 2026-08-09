@@ -32,6 +32,16 @@ export interface AttributionInput {
    * yields a ref but not an explicit one, so it must never reject the message.
    */
   refIsExplicit: boolean;
+  /**
+   * The task belonging to the message this one is a reply to.
+   *
+   * WhatsApp sets `context.id` when somebody taps a quick-reply button on a
+   * template or swipe-replies to a message, and every template we send is
+   * stored with its `waMessageId` and `taskId` — so this is an exact link, not
+   * an inference. It is the whole answer to "which of my six tasks did they
+   * mean": they pointed at one.
+   */
+  replyToTaskId: string | null;
   /** Every task assigned to this person, regardless of status. */
   ownedTaskIds: Set<string>;
   /** Their not-Done tasks, most recently updated first. */
@@ -82,7 +92,7 @@ function decision(
 
 export function decideAttribution(input: AttributionInput): AttributionDecision {
   const {
-    explicitRef, refIsExplicit, ownedTaskIds, openTasks,
+    explicitRef, refIsExplicit, replyToTaskId, ownedTaskIds, openTasks,
     lastAttributedTaskId, action, pendingTaskChoice,
   } = input;
 
@@ -113,7 +123,21 @@ export function decideAttribution(input: AttributionInput): AttributionDecision 
     // Bare number that matched nothing of theirs — ignore it and fall through.
   }
 
-  // ── 2. The task the conversation is already about ────────────────────────
+  // ── 2. The message they replied to ───────────────────────────────────────
+  //
+  // Checked before conversational context because it is not a guess at all:
+  // tapping "Done" on the escalation for TSK-2, or swipe-replying to it, points
+  // at exactly one task. Somebody holding six tasks who taps a button has told
+  // us which one, and asking them "which task did you mean?" after that is both
+  // wrong and insulting.
+  //
+  // It sits BELOW the explicit reference so that replying to TSK-2's message
+  // while typing "TSK-5 done" still does what the words say.
+  if (replyToTaskId && ownedTaskIds.has(replyToTaskId)) {
+    return decision(replyToTaskId, AttributionSource.reply_context);
+  }
+
+  // ── 3. The task the conversation is already about ────────────────────────
   //
   // Checked BEFORE "only one open task", because what was just discussed is
   // stronger evidence than what happens to be left. Otherwise "task 1060 done"
@@ -137,17 +161,17 @@ export function decideAttribution(input: AttributionInput): AttributionDecision 
     }
   }
 
-  // ── 3. No task to attribute to ───────────────────────────────────────────
+  // ── 4. No task to attribute to ───────────────────────────────────────────
   if (openTasks.length === 0) {
     return decision(null, AttributionSource.none);
   }
 
-  // ── 4. Exactly one candidate — not a guess ───────────────────────────────
+  // ── 5. Exactly one candidate — not a guess ───────────────────────────────
   if (openTasks.length === 1) {
     return decision(openTasks[0].id, AttributionSource.single_open_task);
   }
 
-  // ── 5. Several candidates, no context ────────────────────────────────────
+  // ── 6. Several candidates, no context ────────────────────────────────────
   // Actionable and genuinely ambiguous — this is the branch that used to
   // guess. Record the message, change no status, ask which task.
   if (action && ACTIONABLE.includes(action)) {

@@ -11,7 +11,7 @@ describe('showsTaskChip', () => {
     mediaUrl: null, ...over,
   });
 
-  it.each(['explicit_ref', 'list_reply', 'manual'])(
+  it.each(['explicit_ref', 'reply_context', 'list_reply', 'manual'])(
     'shows the chip when a human said which task (%s)',
     (attributedBy) => expect(showsTaskChip(msg({ attributedBy }))).toBe(true),
   );

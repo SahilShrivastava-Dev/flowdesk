@@ -16,6 +16,7 @@ function input(over: Partial<AttributionInput> = {}): AttributionInput {
   return {
     explicitRef: null,
     refIsExplicit: false,
+    replyToTaskId: null,
     ownedTaskIds: new Set(['TSK-1060', 'TSK-1061']),
     openTasks: [T('TSK-1061'), T('TSK-1060', 10)],
     lastAttributedTaskId: null,
@@ -148,5 +149,58 @@ describe('decideAttribution — answering "which task?"', () => {
     }));
     expect(d.taskId).toBe('TSK-1061');
     expect(d.attributedBy).toBe(AttributionSource.explicit_ref);
+  });
+});
+
+describe('decideAttribution — the message they replied to', () => {
+  it('a button tap lands on the task its template was about', () => {
+    // Six tasks open, no task number typed — but they pressed a button
+    // attached to one specific message. That is not ambiguous.
+    const d = decideAttribution(input({
+      action: 'done', replyToTaskId: 'TSK-1060',
+    }));
+    expect(d.taskId).toBe('TSK-1060');
+    expect(d.attributedBy).toBe(AttributionSource.reply_context);
+    expect(d.needsAttribution).toBe(false);
+  });
+
+  it('a typed task number still beats what they replied to', () => {
+    // Replying to TSK-1060's message while writing "TSK-1061 done" means
+    // TSK-1061. The words win over the thing being quoted.
+    const d = decideAttribution(input({
+      explicitRef: 'TSK-1061', refIsExplicit: true,
+      replyToTaskId: 'TSK-1060', action: 'done',
+    }));
+    expect(d.taskId).toBe('TSK-1061');
+    expect(d.attributedBy).toBe(AttributionSource.explicit_ref);
+  });
+
+  it('beats the conversational context', () => {
+    // They were discussing TSK-1061 a moment ago, then replied to TSK-1060's
+    // escalation. The reply is the more specific signal.
+    const d = decideAttribution(input({
+      action: 'done', replyToTaskId: 'TSK-1060', lastAttributedTaskId: 'TSK-1061',
+    }));
+    expect(d.taskId).toBe('TSK-1060');
+    expect(d.attributedBy).toBe(AttributionSource.reply_context);
+  });
+
+  it('ignores a quoted message about a task that is not theirs', () => {
+    // Forwarded from a colleague, or re-assigned since. Falls through to ask.
+    const d = decideAttribution(input({
+      action: 'done', replyToTaskId: 'TSK-4242',
+    }));
+    expect(d.taskId).toBeNull();
+    expect(d.needsAttribution).toBe(true);
+  });
+
+  it('REGRESSION: a bare outcome with no reply is still asked about', () => {
+    // The whole point of the reply branch is that it only fires when the
+    // worker actually pointed at something. Typing "पूरा हो गया" into the
+    // thread with three tasks open must still ask, not pick the newest.
+    const d = decideAttribution(input({ action: 'done', replyToTaskId: null }));
+    expect(d.taskId).toBeNull();
+    expect(d.needsAttribution).toBe(true);
+    expect(d.ambiguousAmong).toEqual(['TSK-1061', 'TSK-1060']);
   });
 });

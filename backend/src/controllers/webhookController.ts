@@ -249,6 +249,7 @@ async function processMessage(message: any): Promise<void> {
   const decision = decideAttribution({
     explicitRef:          intent.taskRef,
     refIsExplicit:        hasExplicitTaskRef(content.text),
+    replyToTaskId:        await taskOfRepliedMessage(message),
     ownedTaskIds,
     openTasks:            openTasks.map((t) => ({ id: t.id, updatedAt: t.updatedAt })),
     lastAttributedTaskId: await getLastAttributedTaskId(user.id),
@@ -474,6 +475,36 @@ async function replyToSender(
       deliveryError:  result.ok ? null : result.error ?? 'Send failed',
     },
   });
+}
+
+/**
+ * Which task, if any, the message being replied to was about.
+ *
+ * WhatsApp sets `context.id` to the wamid of the quoted message whenever
+ * somebody taps a quick-reply button on one of our templates or swipe-replies
+ * to a message. Since every template send is now stored with its `waMessageId`
+ * and `taskId`, that id resolves to a task exactly — no window, no inference.
+ *
+ * This is what makes a button tap unambiguous for somebody holding six tasks:
+ * they did not type "done" into the void, they pressed a button attached to one
+ * specific task's message.
+ *
+ * `context` is also present on messages forwarded from elsewhere, where the
+ * quoted id is not ours — hence the lookup, which simply finds nothing and
+ * leaves attribution to the branches below it.
+ */
+async function taskOfRepliedMessage(message: any): Promise<string | null> {
+  const quotedId: string | null = message?.context?.id ?? null;
+  if (!quotedId) return null;
+
+  const quoted = await prisma.message.findUnique({
+    where:  { waMessageId: quotedId },
+    select: { taskId: true },
+  });
+  if (quoted?.taskId) {
+    console.log(`[Webhook] reply to ${quotedId} → ${quoted.taskId}`);
+  }
+  return quoted?.taskId ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

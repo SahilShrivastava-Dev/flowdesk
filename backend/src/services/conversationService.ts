@@ -98,6 +98,26 @@ export async function getSession(userId: string): Promise<SessionState> {
 /**
  * The task this conversation was last talking about, if recent enough to still
  * be the subject. Used to attribute follow-ups like "this one too".
+ *
+ * INBOUND ONLY, and that restriction is the whole point.
+ *
+ * This used to match any message with a task id, including the ones we send.
+ * So assigning somebody a task wrote an outbound notification carrying that
+ * task id, which became "what the conversation is about" for the next thirty
+ * minutes — and their next bare "done" landed on the task they had just been
+ * given rather than the one they had been working on all morning. The newest
+ * task won every time, which looked exactly like the guessing this function
+ * was written to replace.
+ *
+ * Escalations and deadline reminders made it worse still: the cron fires every
+ * fifteen minutes and now records a message per notification, so on a busy day
+ * the subject of the conversation was whatever the system last complained
+ * about.
+ *
+ * What we said is not evidence of what they meant. Only what *they* said is.
+ * When somebody genuinely is answering a message of ours, they reply to it, and
+ * `context.id` carries that far more precisely than a thirty-minute window ever
+ * could — see `replyToTaskId` in attributionService.
  */
 export async function getLastAttributedTaskId(
   userId: string,
@@ -106,6 +126,7 @@ export async function getLastAttributedTaskId(
   const row = await prisma.message.findFirst({
     where: {
       userId,
+      direction: MessageDirection.inbound,
       taskId: { not: null },
       createdAt: { gt: new Date(Date.now() - withinMs) },
     },

@@ -97,6 +97,7 @@ enum CommandStatus {
 /// queryable after the fact instead of buried in a text string.
 enum AttributionSource {
   explicit_ref // worker named it — "TSK-1060" / "task 1060" / "टास्क 1060"
+  reply_context // worker tapped a template button, or swipe-replied, on a message about this task
   list_reply // worker picked it from the WhatsApp list we sent
   single_open_task // exactly one candidate existed — no guess involved
   recent_context // follow-up inside the context window ("also done")
