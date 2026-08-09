@@ -235,12 +235,14 @@ export default function AddMemberModal({ open, onClose }) {
             value={preferredLanguage}
             onChange={(e) => setPreferredLanguage(e.target.value)}
           >
+            {/* Only languages with approved WhatsApp templates belong here.
+                Marathi was offered without any `*_mr` template existing, so
+                picking it quietly sent English anyway. */}
             <option value="en">🇬🇧 English</option>
             <option value="hi">🇮🇳 हिंदी — Hindi</option>
-            <option value="mr">🇮🇳 मराठी — Marathi</option>
           </select>
           <p className="text-[11px] text-[#9CA3AF] mt-1">
-            Task assignment and escalation alerts will be sent in this language.
+            Assignments, deadline reminders, and escalations will be sent in this language.
           </p>
         </div>
 

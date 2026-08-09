@@ -37,8 +37,6 @@ services:
       # fake worker replies and change task statuses.
       - key: META_APP_SECRET
         sync: false
-      - key: META_TEMPLATES_APPROVED
-        value: "false"
 
       # ── Media + transcription ──────────────────────────────────────────
       # Without CLOUDINARY_*, photos are never stored, so nothing auto-approves.

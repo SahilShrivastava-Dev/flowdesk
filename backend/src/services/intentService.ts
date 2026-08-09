@@ -134,8 +134,11 @@ const ISSUE_KEYWORDS: string[] = [
 ];
 
 const DELAY_KEYWORDS: string[] = [
-  // English
-  'need more time', 'more time needed', 'request delay', 'requesting delay',
+  // English. `more time` is deliberately the broad one: it subsumes "need more
+  // time" and "more time needed", and it catches the wording on the approved
+  // WhatsApp templates ("Require more time") without depending on the exact
+  // word order somebody typed into Meta Business Manager months ago.
+  'more time', 'need more time', 'more time needed', 'request delay', 'requesting delay',
   'will be late', 'running late', 'postpone', 'reschedule', 'extend deadline',
   'tomorrow', 'delay', 'late',
   // Hindi — romanised

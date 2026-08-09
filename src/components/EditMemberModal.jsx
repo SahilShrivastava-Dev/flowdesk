@@ -282,9 +282,11 @@ export default function EditMemberModal({ user, onClose }) {
             value={preferredLanguage}
             onChange={e => setPreferredLanguage(e.target.value)}
           >
+            {/* Only languages with approved WhatsApp templates belong here.
+                Marathi was offered without any `*_mr` template existing, so
+                picking it quietly sent English anyway. */}
             <option value="en">🇬🇧 English</option>
             <option value="hi">🇮🇳 हिंदी — Hindi</option>
-            <option value="mr">🇮🇳 मराठी — Marathi</option>
           </select>
         </div>
 

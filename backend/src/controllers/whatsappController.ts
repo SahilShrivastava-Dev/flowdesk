@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { AttributionSource, DeliveryStatus, MessageDirection, MessageKind } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { sendTextMessage, sendWhatsApp } from '../services/whatsappService';
+import { sendTextMessage, sendUpdateWaitingNotification } from '../services/whatsappService';
 import { canAccessConversation, getLastInbound, computeSession } from '../services/conversationService';
 
 /**
@@ -46,7 +46,7 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
 
   const target = await prisma.user.findUnique({
     where:  { id: targetUserId },
-    select: { id: true, name: true, phone: true, reportingToId: true },
+    select: { id: true, name: true, phone: true, preferredLanguage: true, reportingToId: true },
   });
   if (!target) { res.status(404).json({ error: 'User not found' }); return; }
 
@@ -115,7 +115,21 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
 
   // ⏰ Window closed — a template is the only thing Meta will deliver. Send one
   // to re-open it and keep a record of what the sender actually wanted to say.
-  await sendWhatsApp(target.phone, 'hello_world', []);
+  //
+  // This used to send `hello_world`, so a worker waiting on their manager got
+  // Meta's own "Welcome and congratulations!!" sample text from a number they
+  // associate with work. `update_waiting` names who is trying to reach them, in
+  // their own language, and asks them to reply — which is the entire point of
+  // sending anything here.
+  const requester = await prisma.user.findUnique({
+    where:  { id: requesterId },
+    select: { name: true },
+  });
+  const result = await sendUpdateWaitingNotification(
+    target.phone,
+    requester?.name ?? 'FlowDesk',
+    target.preferredLanguage,
+  );
 
   const created = await prisma.message.create({
     data: {
@@ -124,18 +138,27 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
       direction:      MessageDirection.outbound,
       kind:           MessageKind.system,
       taskId:         taskId ?? null,
-      text:           `[Session expired — sent hello_world to re-open. Intended: "${text}"]`,
-      deliveryStatus: DeliveryStatus.sent,
+      text:           `[Session expired — sent a re-open notification. Intended: "${text}"]`,
+      // The send result is recorded rather than assumed. This hardcoded `sent`,
+      // so a template Meta rejected still showed a delivered tick in the UI.
+      waMessageId:    result.waMessageId ?? null,
+      deliveryStatus: result.ok ? DeliveryStatus.sent : DeliveryStatus.failed,
+      deliveryError:  result.ok ? null : result.error ?? 'Send failed',
     },
     include: { sender: { select: { id: true, name: true, avatar: true, color: true } } },
   });
 
-  res.json({
-    ok: true,
+  res.status(result.ok ? 200 : 502).json({
+    ok: result.ok,
     mode: 'template_fallback',
     message: created,
-    warning:
-      `${target.name} hasn't replied in over 24h. A hello_world message was sent to restart ` +
-      `the conversation. Once they reply, you can send free messages.`,
+    ...(result.ok
+      ? {
+          warning:
+            `${target.name} hasn't replied in over 24h, so your message couldn't be delivered ` +
+            `as typed. They've been notified that you're trying to reach them — once they ` +
+            `reply, you can send it.`,
+        }
+      : { error: result.error }),
   });
 }

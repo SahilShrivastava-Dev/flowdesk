@@ -1,6 +1,10 @@
 import { prisma } from '../lib/prisma';
 import { ACTIVITY_TYPE } from '../lib/constants';
-import { sendWhatsApp, sendTaskAssignmentNotification, sendEscalationNotification } from './whatsappService';
+import {
+  sendDeadlineReminderNotification, sendEscalationNotification,
+  sendSupervisorEscalationNotification,
+} from './whatsappService';
+import { recordTemplateSend } from './notifyService';
 
 // ─── Escalation config ────────────────────────────────────────────────────────
 //
@@ -131,42 +135,68 @@ export async function runEscalation(): Promise<void> {
 
       for (const person of outstanding) {
         if (!person.phone) continue;
-        sendEscalationNotification(
+        const result = await sendEscalationNotification(
           person.phone,
-          person.name,
+          person.name,          // {{1}} = the recipient's own name — this is their task
           task.title,
           person.preferredLanguage,
-        ).catch(console.error);
+        );
+        await recordTemplateSend({
+          userId:  person.id,
+          actorId: null,        // the cron, not a person
+          taskId:  task.id,
+          text:    `⏰ Escalated to L${nextLevel} — "${task.title}" is past its deadline`,
+          result,
+        });
       }
 
       // ── Notify: ping manager on L2+, Admin on L3+ ────────────────────────
+      //
+      // Supervisors get their own template. The holder-facing one opens
+      // "Hi {{1}}, your task…", so sending it upward with the assignee's name
+      // in {{1}} addressed the manager by somebody else's name and told them
+      // they owned work that was never theirs.
       if (nextLevel >= 2 && task.assignedTo.reportingToId) {
         const manager = await prisma.user.findUnique({
           where:  { id: task.assignedTo.reportingToId },
-          select: { phone: true, name: true, preferredLanguage: true, reportingToId: true },
+          select: { id: true, phone: true, name: true, preferredLanguage: true, reportingToId: true },
         });
         if (manager?.phone) {
-          sendEscalationNotification(
+          const result = await sendSupervisorEscalationNotification(
             manager.phone,
             task.assignedTo.name,   // {{1}} = whose task is overdue
             task.title,
             manager.preferredLanguage,
-          ).catch(console.error);
+          );
+          await recordTemplateSend({
+            userId:  manager.id,
+            actorId: null,
+            taskId:  task.id,
+            text:    `⏰ L${nextLevel}: ${task.assignedTo.name}'s task "${task.title}" is overdue`,
+            result,
+          });
         }
 
         // L3+: also notify the manager's manager (Admin level)
         if (nextLevel >= 3 && manager?.reportingToId) {
           const admin = await prisma.user.findUnique({
             where:  { id: manager.reportingToId },
-            select: { phone: true, name: true, preferredLanguage: true },
+            select: { id: true, phone: true, name: true, preferredLanguage: true },
           });
           if (admin?.phone) {
-            sendEscalationNotification(
+            const result = await sendSupervisorEscalationNotification(
               admin.phone,
               task.assignedTo.name,
               task.title,
               admin.preferredLanguage,
-            ).catch(console.error);
+            );
+            await recordTemplateSend({
+              userId:  admin.id,
+              actorId: null,
+              taskId:  task.id,
+              text:    `⏰ L${nextLevel}: ${task.assignedTo.name}'s task "${task.title}" is overdue`,
+              result,
+            });
           }
         }
       }
@@ -184,9 +214,9 @@ export async function runEscalation(): Promise<void> {
       status:   { notIn: ['Done', 'Submitted'] },  // submitted work is with the reviewer, not the worker
     },
     include: {
-      assignedTo: { select: { phone: true, name: true, preferredLanguage: true } },
+      assignedTo: { select: { id: true, phone: true, name: true, preferredLanguage: true } },
       assignees: {
-        select: { user: { select: { phone: true, name: true, preferredLanguage: true } } },
+        select: { user: { select: { id: true, phone: true, name: true, preferredLanguage: true } } },
       },
     },
   });
@@ -200,12 +230,22 @@ export async function runEscalation(): Promise<void> {
 
       for (const person of holders) {
         if (!person.phone) continue;
-        await sendTaskAssignmentNotification(
+        // Its own template. This used to send `task_assignment`, so somebody
+        // who had held a task for a week was told it had just been given to
+        // them — and the real point, that the deadline is close, was never said.
+        const result = await sendDeadlineReminderNotification(
           person.phone,
           person.name,
           task.id,
           person.preferredLanguage,  // auto-picks the right language template
         );
+        await recordTemplateSend({
+          userId:  person.id,
+          actorId: null,
+          taskId:  task.id,
+          text:    `🔔 Reminder: ${task.id} is due soon and not yet complete`,
+          result,
+        });
       }
       await prisma.task.update({
         where: { id: task.id },

@@ -152,8 +152,6 @@ JWT_EXPIRES_IN="7d"
 META_PHONE_ID="your_phone_number_id"
 META_ACCESS_TOKEN="EAAxxxxx..."
 META_VERIFY_TOKEN="flowdesk-webhook-secret"
-# Set "true" once task_assignment + task_escalation templates approved by Meta
-META_TEMPLATES_APPROVED="false"
 
 # Cloudinary — for WhatsApp image/doc attachments
 CLOUDINARY_CLOUD_NAME="your_cloud_name"
@@ -248,7 +246,10 @@ Reply immediately:
 • *issue <reason>* — to flag a blocker
 ```
 
-Once approved → set `META_TEMPLATES_APPROVED="true"` in `.env`. No code changes needed.
+Each template is submitted twice — `<name>_en` and `<name>_hi` — with the matching
+language selected in Meta. `APPROVED_LANGS` in `whatsappService.ts` is the list of
+languages that actually exist; anything else falls back to English rather than being
+sent to a template name Meta has never heard of.
 
 ---
 
@@ -294,7 +295,8 @@ Once approved → set `META_TEMPLATES_APPROVED="true"` in `.env`. No code change
 | **`alertDispatched` flag** | Prevents 48h reminder from duplicating the immediate creation alert |
 | **Buffer parsing** | `express.raw()` returns a Node Buffer; webhook explicitly handles Buffer / string / object |
 | **Phone matching** | Last 10 digits used (`LIKE %...%`) so `+91 98765 43210` matches Meta's `919876543210` |
-| **Template fallback** | `META_TEMPLATES_APPROVED=false` → all sends use pre-approved `hello_world` |
+| **Template naming** | Language is baked into the name (`task_assignment_hi`) and must match the `language.code` sent with it |
+| **Template buttons** | A quick-reply tap arrives as message type `button`, not `interactive` — labels are worded to match the `intentService` phrase banks |
 | **Cloudinary `resource_type: auto`** | Single upload path handles images, videos, and documents |
 | **Approval guard** | `canApprove` checks `!task.approved` — prevents double-approval spam |
 | **Image-only WhatsApp** | No-caption images attach to most recently active task within 7 days |

@@ -6,9 +6,12 @@ vi.mock('../../src/services/whatsappService', () => ({
   sendInteractiveList:    vi.fn().mockResolvedValue(undefined),
   sendInteractiveButtons: vi.fn().mockResolvedValue(undefined),
   sendTextMessage:     vi.fn().mockResolvedValue({ ok: true, waMessageId: 'wamid.OUT' }),
-  sendWhatsApp:        vi.fn().mockResolvedValue(undefined),
   sendTaskAssignmentNotification: vi.fn().mockResolvedValue({ ok: true, waMessageId: 'wamid.TPL' }),
   sendEscalationNotification:     vi.fn().mockResolvedValue({ ok: true }),
+  sendTaskReassignedNotification:  vi.fn().mockResolvedValue({ ok: true }),
+  sendDeadlineReminderNotification: vi.fn().mockResolvedValue({ ok: true }),
+  sendSupervisorEscalationNotification: vi.fn().mockResolvedValue({ ok: true }),
+  sendUpdateWaitingNotification:   vi.fn().mockResolvedValue({ ok: true }),
   sendWhatsAppLocalized:          vi.fn().mockResolvedValue({ ok: true }),
 }));
 

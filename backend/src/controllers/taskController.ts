@@ -2,7 +2,10 @@ import { Request, Response } from 'express';
 import { ActionChannel, TaskStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { ACTIVITY_TYPE } from '../lib/constants';
-import { sendWhatsApp } from '../services/whatsappService';
+import {
+  sendEscalationNotification, sendSupervisorEscalationNotification,
+} from '../services/whatsappService';
+import { recordTemplateSend } from '../services/notifyService';
 import { canManageTask } from '../services/permissionService';
 import * as taskService from '../services/taskService';
 import { HTTP_STATUS, TaskOpError, chronological, taskInclude } from '../services/taskService';
@@ -276,9 +279,9 @@ export async function escalateTask(req: Request, res: Response): Promise<void> {
     where: { id },
     include: {
       assignedTo: {
-        select: { id: true, name: true, phone: true, reportingToId: true,
-          reportingTo: { select: { id: true, name: true, phone: true, reportingToId: true,
-            reportingTo: { select: { id: true, name: true, phone: true } }
+        select: { id: true, name: true, phone: true, preferredLanguage: true, reportingToId: true,
+          reportingTo: { select: { id: true, name: true, phone: true, preferredLanguage: true, reportingToId: true,
+            reportingTo: { select: { id: true, name: true, phone: true, preferredLanguage: true } }
           }}
         },
       },
@@ -329,29 +332,54 @@ export async function escalateTask(req: Request, res: Response): Promise<void> {
   const manager  = assignee.reportingTo;
   const admin    = manager?.reportingTo;
 
-  if (role === 'Employee') {
-    // Notify the manager
-    if (manager?.phone) {
-      sendWhatsApp(manager.phone, 'task_escalation', [assignee.name, existing.title]).catch(console.error);
+  // Two audiences, two templates. The holder is told their own task is overdue;
+  // a supervisor is told somebody else's is. These all used to send the
+  // holder-facing template in English regardless of who was reading it, so a
+  // Hindi-speaking manager got an English message addressed to their report.
+  const notifyHolder = async (
+    person: { id: string; name: string; phone: string | null; preferredLanguage: string },
+  ) => {
+    if (!person.phone) return;
+    const result = await sendEscalationNotification(
+      person.phone, person.name, existing.title, person.preferredLanguage,
+    );
+    await recordTemplateSend({
+      userId: person.id, actorId: userId, taskId: existing.id,
+      text: `⏰ Escalated to L${nextLevel} — "${existing.title}" is past its deadline`,
+      result,
+    });
+  };
+
+  const notifySupervisor = async (
+    person: { id: string; name: string; phone: string | null; preferredLanguage: string },
+  ) => {
+    if (!person.phone) return;
+    const result = await sendSupervisorEscalationNotification(
+      person.phone, assignee.name, existing.title, person.preferredLanguage,
+    );
+    await recordTemplateSend({
+      userId: person.id, actorId: userId, taskId: existing.id,
+      text: `⏰ L${nextLevel}: ${assignee.name}'s task "${existing.title}" is overdue`,
+      result,
+    });
+  };
+
+  // Fire and forget — the escalation itself is already committed, and a failed
+  // notification must not turn a successful escalation into a 500.
+  void (async () => {
+    if (role === 'Employee') {
+      // Up one level: their manager.
+      if (manager) await notifySupervisor(manager);
+    } else if (role === 'Manager') {
+      // Up to the Admin, and back down so the assignee knows it went over their
+      // manager's head.
+      if (admin) await notifySupervisor(admin);
+      await notifyHolder(assignee);
+    } else if (role === 'Admin') {
+      await notifyHolder(assignee);
+      if (manager) await notifySupervisor(manager);
     }
-  } else if (role === 'Manager') {
-    // Notify Admin (manager's manager)
-    if (admin?.phone) {
-      sendWhatsApp(admin.phone, 'task_escalation', [assignee.name, existing.title]).catch(console.error);
-    }
-    // Also ping the assignee so they know it's been escalated above their manager
-    if (assignee.phone) {
-      sendWhatsApp(assignee.phone, 'task_escalation', [assignee.name, existing.title]).catch(console.error);
-    }
-  } else if (role === 'Admin') {
-    // Notify both the assignee and their manager
-    if (assignee.phone) {
-      sendWhatsApp(assignee.phone, 'task_escalation', [assignee.name, existing.title]).catch(console.error);
-    }
-    if (manager?.phone) {
-      sendWhatsApp(manager.phone, 'task_escalation', [assignee.name, existing.title]).catch(console.error);
-    }
-  }
+  })().catch((err) => console.error(`[Escalate] Notification failed for ${existing.id}:`, err));
 
   res.json(chronological(task));
 }

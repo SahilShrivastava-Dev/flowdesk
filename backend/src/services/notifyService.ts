@@ -2,8 +2,54 @@ import {
   ActionChannel, AttributionSource, DeliveryStatus, MessageDirection, MessageKind,
 } from '@prisma/client';
 import { prisma } from '../lib/prisma';
-import { sendTaskAssignmentNotification, sendTextMessage } from './whatsappService';
+import {
+  SendResult, sendTaskAssignmentNotification, sendTaskReassignedNotification, sendTextMessage,
+} from './whatsappService';
 import { computeSession, getLastInbound } from './conversationService';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recording an outbound template.
+//
+// Template notifications used to be fire-and-forget everywhere except task
+// creation: the escalation cron sent three of them per overdue task and not one
+// appeared in the tracker, so a thread opened with the assignee's reply and
+// nothing before it — and Meta's delivery receipts had no row to match, so a
+// silently failed escalation looked identical to a delivered one.
+//
+// Never throws. A notification that fails to be *recorded* must not roll back
+// the escalation or reassignment that already happened.
+// ─────────────────────────────────────────────────────────────────────────────
+export async function recordTemplateSend(p: {
+  /** Whose conversation this belongs to — the recipient. */
+  userId:   string;
+  /** Who caused it. `null` for unattended writers like the escalation cron. */
+  actorId:  string | null;
+  taskId:   string | null;
+  /** What the tracker should show. Templates render server-side, so we say it. */
+  text:     string;
+  result:   SendResult;
+}): Promise<void> {
+  try {
+    await prisma.message.create({
+      data: {
+        userId:    p.userId,
+        // Falling back to the recipient keeps the FK satisfied for the cron,
+        // the same way notifyAssignment does for unattended reassignments.
+        senderId:  p.actorId ?? p.userId,
+        direction: MessageDirection.outbound,
+        kind:      MessageKind.system,
+        taskId:    p.taskId,
+        attributedBy: p.taskId ? AttributionSource.manual : AttributionSource.none,
+        text:      p.text,
+        waMessageId:    p.result.waMessageId ?? null,
+        deliveryStatus: p.result.ok ? DeliveryStatus.sent : DeliveryStatus.failed,
+        deliveryError:  p.result.ok ? null : p.result.error ?? 'Send failed',
+      },
+    });
+  } catch (err) {
+    console.error('[Notify] Failed recording an outbound template:', err);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Telling somebody they've been given work.
@@ -73,14 +119,26 @@ export async function notifyAssignment(p: NotifyParams): Promise<void> {
 
     const session = computeSession(await getLastInbound(p.assignee.id));
 
+    // Outside the window a template is the only thing Meta will deliver, and
+    // the two events need different ones: `task_assignment` announces new work,
+    // `task_reassigned` says a task has changed hands and names who moved it —
+    // which is what the free-form copy above has always said.
     const result = session.open
       ? await sendTextMessage(p.assignee.phone, bodyFor(p))
-      : await sendTaskAssignmentNotification(
-          p.assignee.phone,
-          p.assignee.name,
-          p.task.id,
-          p.assignee.preferredLanguage,
-        );
+      : p.kind === 'reassigned'
+        ? await sendTaskReassignedNotification(
+            p.assignee.phone,
+            p.assignee.name,
+            p.actor?.name ?? 'FlowDesk',
+            p.task.id,
+            p.assignee.preferredLanguage,
+          )
+        : await sendTaskAssignmentNotification(
+            p.assignee.phone,
+            p.assignee.name,
+            p.task.id,
+            p.assignee.preferredLanguage,
+          );
 
     await prisma.message.create({
       data: {

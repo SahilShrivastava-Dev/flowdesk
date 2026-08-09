@@ -141,11 +141,17 @@ Activity   (complete audit trail)
 ```
 OUTBOUND (system → employee)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Task created          → task_assignment template  (title + deadline)
-Task escalated        → task_escalation template  (name + title)
-48h before deadline   → task_assignment template  (reminder)
+Task created          → task_assignment            (assignee + task id)
+Task reassigned       → task_reassigned            (assignee + who moved it + task id)
+48h before deadline   → task_deadline_reminder     (holder + task id)
+Task overdue → holder → task_escalation            (holder + title)
+Task overdue → boss   → task_escalation_supervisor (assignee + title)
 Admin sends message   → Free text (if within 24h session window)
-                      → hello_world template (if session expired)
+                      → update_waiting (if session expired — names the sender)
+
+Every one of the above exists as `_en` and `_hi`, picked by the recipient's
+`preferredLanguage`. All are recorded as outbound `Message` rows, so a template
+send shows up in the tracker and Meta's delivery receipt has a row to match.
 
 INBOUND (employee → system, via webhook)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -326,15 +332,13 @@ npx prisma db seed   # optional — remove for production
 # → Verify token: (from META_VERIFY_TOKEN in .env)
 # → Subscribe: messages
 
-# 8. Submit WhatsApp templates to Meta
-# → task_assignment (Category: Utility)
-# → task_escalation (Category: Utility)
+# 8. Submit WhatsApp templates to Meta (all Category: Utility)
+# → task_assignment, task_reassigned, task_deadline_reminder,
+#   task_escalation, task_escalation_supervisor, update_waiting
+# → Each one twice: <name>_en (English) and <name>_hi (Hindi)
 # → Approval: 15 min to 2 hours
 
-# 9. Set META_TEMPLATES_APPROVED="true" in Render env vars
-# → Redeploy
-
-# 10. Create Admin user via API or DB seed
+# 9. Create Admin user via API or DB seed
 # Default credentials: aarav@flowdesk.io / flowdesk123 (change immediately)
 ```
 
@@ -352,7 +356,6 @@ JWT_EXPIRES_IN=7d
 META_PHONE_ID=
 META_ACCESS_TOKEN=             # Use System User token (doesn't expire)
 META_VERIFY_TOKEN=             # any strong random string
-META_TEMPLATES_APPROVED=true
 
 # Cloudinary
 CLOUDINARY_CLOUD_NAME=

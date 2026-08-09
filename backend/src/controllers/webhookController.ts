@@ -541,6 +541,27 @@ async function extractContent(message: any): Promise<InboundContent | null> {
       return { text: id, mediaUrl: null, transcription: null, kind };
     }
 
+    case 'button': {
+      // A quick-reply button on a TEMPLATE, which is a different message shape
+      // from the `interactive` buttons we send ourselves: Meta delivers it as
+      // its own top-level type carrying `{ text, payload }` rather than a
+      // `button_reply` with an id.
+      //
+      // Without this case every tap fell through to `default` and was dropped
+      // silently — the worker pressed "Done", the task never moved, and nothing
+      // was recorded to show they had tried.
+      //
+      // The label is treated as ordinary text on purpose: the button wording is
+      // chosen to match the phrase banks in intentService, so "Done" /
+      // "पूरा हो गया" / "और समय चाहिए" route exactly like the same words typed
+      // by hand, in whichever language the template went out in.
+      const b = message.button;
+      const label = String(b?.text ?? b?.payload ?? '').trim();
+      if (!label) return null;
+      console.log(`[Webhook] template button: "${label}"`);
+      return { text: label, mediaUrl: null, transcription: null, kind: MessageKind.text };
+    }
+
     default:
       // sticker, reaction, location — ignore
       return null;

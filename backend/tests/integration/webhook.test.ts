@@ -5,11 +5,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/services/whatsappService', () => ({
   sendInteractiveList: vi.fn().mockResolvedValue(undefined),
   sendTextMessage:     vi.fn().mockResolvedValue({ ok: true }),
-  sendWhatsApp:        vi.fn().mockResolvedValue(undefined),
   // Without these, creating a task makes a real network call to Meta and
   // the suite hangs until it times out.
   sendTaskAssignmentNotification: vi.fn().mockResolvedValue({ ok: true }),
   sendEscalationNotification:     vi.fn().mockResolvedValue({ ok: true }),
+  sendTaskReassignedNotification:  vi.fn().mockResolvedValue({ ok: true }),
+  sendDeadlineReminderNotification: vi.fn().mockResolvedValue({ ok: true }),
+  sendSupervisorEscalationNotification: vi.fn().mockResolvedValue({ ok: true }),
+  sendUpdateWaitingNotification:   vi.fn().mockResolvedValue({ ok: true }),
   sendWhatsAppLocalized:          vi.fn().mockResolvedValue({ ok: true }),
 }));
 

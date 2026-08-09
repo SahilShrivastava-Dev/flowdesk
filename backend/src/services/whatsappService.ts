@@ -3,35 +3,40 @@ import axios, { AxiosError } from 'axios';
 const BASE = 'https://graph.facebook.com/v19.0';
 
 // ─── Language → Template mapping ─────────────────────────────────────────────
-// Add a row here whenever you create & approve a new language template in Meta.
-// Key   = preferredLanguage value stored on the User model (lowercase)
-// Value = { templateName, langCode } used in the WhatsApp API call
+//
+// Every template is submitted to Meta once per language, with the language
+// baked into the name: `task_assignment_en`, `task_assignment_hi`. So the
+// member's `preferredLanguage` picks both the template name and the language
+// code in the API call, and the two must agree.
+//
+// APPROVED_LANGS is the set that actually exists in Meta Business Manager.
+// Anything else falls back to English rather than being sent to a template name
+// Meta has never heard of — that send is rejected outright, so the person would
+// get nothing at all. Only add a code here once BOTH the template and its
+// language have been approved.
+const APPROVED_LANGS = new Set(['en', 'hi']);
 
-// Task assignment templates (sent when a task is first created)
-const ASSIGNMENT_LANG_CONFIG: Record<string, { templateName: string; langCode: string }> = {
-  en: { templateName: 'task_assignment_en', langCode: 'en' },
-  hi: { templateName: 'task_assignment_hi', langCode: 'hi' },
-  mr: { templateName: 'task_assignment_mr', langCode: 'mr' },
-  ta: { templateName: 'task_assignment_ta', langCode: 'ta' },  // add when approved
-  te: { templateName: 'task_assignment_te', langCode: 'te' },  // add when approved
-};
+/** The base names, each of which exists as `<base>_en` and `<base>_hi`. */
+const TEMPLATE = {
+  ASSIGNMENT:           'task_assignment',
+  REASSIGNED:           'task_reassigned',
+  DEADLINE_REMINDER:    'task_deadline_reminder',
+  ESCALATION:           'task_escalation',
+  ESCALATION_SUPERVISOR: 'task_escalation_supervisor',
+  UPDATE_WAITING:       'update_waiting',
+} as const;
 
-// Escalation templates (sent when a task goes overdue)
-const ESCALATION_LANG_CONFIG: Record<string, { templateName: string; langCode: string }> = {
-  en: { templateName: 'task_escalation_en', langCode: 'en' },
-  hi: { templateName: 'task_escalation_hi', langCode: 'hi' },
-  mr: { templateName: 'task_escalation_mr', langCode: 'mr' },
-  ta: { templateName: 'task_escalation_ta', langCode: 'ta' },  // add when approved
-  te: { templateName: 'task_escalation_te', langCode: 'te' },  // add when approved
-};
+function templateFor(base: string, preferredLang: string): { name: string; langCode: string } {
+  const lang = APPROVED_LANGS.has(preferredLang) ? preferredLang : 'en';
+  return { name: `${base}_${lang}`, langCode: lang };
+}
 
 /**
  * Send a task-assignment notification in the member's preferred language.
- * Falls back to English if their language hasn't been set up yet.
  *
  * @param to               Phone number (E.164 or raw)
- * @param assigneeName     Used for {{1}} in the template
- * @param taskId           Used for {{2}} in the template  (e.g. "TSK-1054")
+ * @param assigneeName     {{1}}
+ * @param taskId           {{2}}  (e.g. "TSK-1054")
  * @param preferredLang    Value from User.preferredLanguage (e.g. "hi", "en")
  */
 export async function sendTaskAssignmentNotification(
@@ -40,14 +45,50 @@ export async function sendTaskAssignmentNotification(
   taskId:        string,
   preferredLang: string = 'en',
 ): Promise<SendResult> {
-  const config = ASSIGNMENT_LANG_CONFIG[preferredLang] ?? ASSIGNMENT_LANG_CONFIG['en'];
-  console.log(`[WhatsApp] Assignment | language "${preferredLang}" → template "${config.templateName}"`);
-  return sendWhatsAppLocalized(to, config.templateName, [assigneeName, taskId], config.langCode);
+  const t = templateFor(TEMPLATE.ASSIGNMENT, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [assigneeName, taskId], t.langCode);
 }
 
 /**
- * Send an escalation alert in the recipient's preferred language.
- * {{1}} = recipient name (assignee or manager), {{2}} = task title
+ * Tell somebody a task has changed hands and is now theirs.
+ *
+ * Distinct from the assignment template because "a new task has been assigned"
+ * is misleading for work that already existed and may already be part-done.
+ *
+ * {{1}} = new assignee, {{2}} = who moved it, {{3}} = task id
+ */
+export async function sendTaskReassignedNotification(
+  to:            string,
+  assigneeName:  string,
+  actorName:     string,
+  taskId:        string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.REASSIGNED, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [assigneeName, actorName, taskId], t.langCode);
+}
+
+/**
+ * The advance warning sent before a deadline, while there is still time to act.
+ *
+ * This used to reuse the assignment template, so somebody who had held a task
+ * for a week was told it had just been assigned to them.
+ *
+ * {{1}} = holder, {{2}} = task id
+ */
+export async function sendDeadlineReminderNotification(
+  to:            string,
+  holderName:    string,
+  taskId:        string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.DEADLINE_REMINDER, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [holderName, taskId], t.langCode);
+}
+
+/**
+ * Chase the person actually holding an overdue task.
+ * {{1}} = recipient's own name, {{2}} = task title
  */
 export async function sendEscalationNotification(
   to:            string,
@@ -55,24 +96,45 @@ export async function sendEscalationNotification(
   taskTitle:     string,
   preferredLang: string = 'en',
 ): Promise<SendResult> {
-  const config = ESCALATION_LANG_CONFIG[preferredLang] ?? ESCALATION_LANG_CONFIG['en'];
-  console.log(`[WhatsApp] Escalation | language "${preferredLang}" → template "${config.templateName}"`);
-  return sendWhatsAppLocalized(to, config.templateName, [recipientName, taskTitle], config.langCode);
+  const t = templateFor(TEMPLATE.ESCALATION, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [recipientName, taskTitle], t.langCode);
 }
 
 /**
- * While META_TEMPLATES_APPROVED !== "true", every outbound message falls back
- * to the pre-approved `hello_world` template (no parameters).
- * Flip the env var to "true" once Meta approves task_assignment + task_escalation.
+ * Tell a manager or admin that somebody *else's* task is overdue.
+ *
+ * The holder-facing template opens "Hi {{1}}, your task…", so sending it to a
+ * supervisor with the assignee's name in {{1}} produced a message addressed to
+ * the wrong person and claiming the supervisor owned the work.
+ *
+ * {{1}} = the assignee whose task it is, {{2}} = task title
  */
-function resolveTemplate(
-  name: string,
-  parameters: string[]
-): { name: string; parameters: string[] } {
-  if (process.env.META_TEMPLATES_APPROVED === 'true') {
-    return { name, parameters };
-  }
-  return { name: 'hello_world', parameters: [] };
+export async function sendSupervisorEscalationNotification(
+  to:            string,
+  assigneeName:  string,
+  taskTitle:     string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.ESCALATION_SUPERVISOR, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [assigneeName, taskTitle], t.langCode);
+}
+
+/**
+ * Nudge somebody whose 24h window has closed so they reply and re-open it.
+ *
+ * Replaces the `hello_world` sample template, which delivered Meta's own
+ * "Welcome and congratulations!!" boilerplate to a worker who was expecting a
+ * message from their manager.
+ *
+ * {{1}} = who is trying to reach them
+ */
+export async function sendUpdateWaitingNotification(
+  to:            string,
+  senderName:    string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.UPDATE_WAITING, preferredLang);
+  return sendWhatsAppLocalized(to, t.name, [senderName], t.langCode);
 }
 
 /**
@@ -163,51 +225,6 @@ export async function verifyTokenOnStartup(): Promise<void> {
     console.log('[WhatsApp] ✅ Token verified — ready to send messages');
   } catch (err) {
     handleMetaError(err, 'startup token check');
-  }
-}
-
-export async function sendWhatsApp(
-  to: string,
-  templateName: string,
-  parameters: string[]
-): Promise<void> {
-  const phoneId = process.env.META_PHONE_ID;
-  const token   = process.env.META_ACCESS_TOKEN;
-
-  if (!phoneId || !token) {
-    console.warn('[WhatsApp] META_PHONE_ID or META_ACCESS_TOKEN not set — skipping send');
-    return;
-  }
-
-  const normalisedTo = normalisePhone(to);
-  if (!normalisedTo) {
-    console.warn('[WhatsApp] Invalid phone number — skipping send');
-    return;
-  }
-
-  const resolved = resolveTemplate(templateName, parameters);
-  console.log(`[WhatsApp] Sending "${resolved.name}" → ${normalisedTo}`);
-
-  try {
-    await axios.post(
-      `${BASE}/${phoneId}/messages`,
-      {
-        messaging_product: 'whatsapp',
-        to: normalisedTo,
-        type: 'template',
-        template: {
-          name:     resolved.name,
-          language: { code: 'en_US' },
-          components: resolved.parameters.length > 0
-            ? [{ type: 'body', parameters: resolved.parameters.map((text) => ({ type: 'text', text })) }]
-            : [],
-        },
-      },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    console.log(`[WhatsApp] ✅ Sent to ${normalisedTo}`);
-  } catch (err) {
-    handleMetaError(err, `sendWhatsApp → ${normalisedTo}`);
   }
 }
 
@@ -320,7 +337,8 @@ export async function sendMediaMessage(
 
 // ─── Interactive Messages ─────────────────────────────────────────────────────
 // These only work within the 24-hour session window (after the customer has
-// messaged you first). Outside that window, use sendWhatsApp() with a template.
+// messaged you first). Outside that window, use one of the template senders at
+// the top of this file — they are the only thing Meta will deliver.
 
 export interface ReplyButton {
   id:    string;  // your internal ID, e.g. "done" — returned in webhook when tapped
@@ -455,11 +473,30 @@ export async function sendInteractiveList(
 }
 
 /**
- * Send a WhatsApp template in a specific language.
- * Use this when targeting customers in Hindi, Marathi, or other regional languages.
- * The template must have been created and approved in that language in Meta Business Manager.
+ * Make a value safe to drop into a template parameter.
  *
- * @param languageCode  BCP-47 code: 'hi' (Hindi), 'mr' (Marathi), 'en_US' (English), etc.
+ * Meta rejects a body parameter that contains a newline, a tab, or four or more
+ * consecutive spaces — and a task title typed into the dashboard textarea can
+ * carry all three. The rejection kills the whole send, not just the parameter,
+ * so the substitution happens here rather than being remembered at ten call
+ * sites. An empty parameter is rejected too, hence the dash.
+ */
+function sanitiseParam(raw: string): string {
+  const clean = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  if (!clean) return '—';
+  // Meta caps the whole rendered body at 1024 characters. A long task title is
+  // the only parameter that can realistically approach that, and losing the
+  // sentence after it would be worse than losing the tail of the title.
+  return clean.length > 300 ? `${clean.slice(0, 297)}...` : clean;
+}
+
+/**
+ * Send a WhatsApp template in a specific language.
+ *
+ * The template must exist in Meta under exactly this name AND be approved in
+ * this language — `templateFor` above is what keeps those two in step.
+ *
+ * @param languageCode  BCP-47 code: 'en', 'hi'
  */
 export async function sendWhatsAppLocalized(
   to:           string,
@@ -480,6 +517,7 @@ export async function sendWhatsAppLocalized(
     return { ok: false, error: 'Invalid phone number' };
   }
 
+  const safeParams = parameters.map(sanitiseParam);
   console.log(`[WhatsApp] Sending "${templateName}" (${languageCode}) → ${normalisedTo}`);
 
   try {
@@ -492,8 +530,8 @@ export async function sendWhatsAppLocalized(
         template: {
           name:     templateName,
           language: { code: languageCode },
-          components: parameters.length > 0
-            ? [{ type: 'body', parameters: parameters.map((text) => ({ type: 'text', text })) }]
+          components: safeParams.length > 0
+            ? [{ type: 'body', parameters: safeParams.map((text) => ({ type: 'text', text })) }]
             : [],
         },
       },

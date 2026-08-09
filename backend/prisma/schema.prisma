@@ -114,7 +114,10 @@ model User {
   reportingTo       User?   @relation("tree", fields: [reportingToId], references: [id])
   reports           User[]  @relation("tree")
   phone             String?
-  preferredLanguage String  @default("en") // "en" | "hi" | "mr" | "ta" | "te" etc.
+  /// Picks the WhatsApp template language. Only codes listed in APPROVED_LANGS
+  /// (whatsappService.ts) have templates in Meta; anything else falls back to
+  /// English at send time.
+  preferredLanguage String  @default("en") // "en" | "hi"
   avatar            String  @default("")
   color             String  @default("from-slate-400 to-slate-600")
 
