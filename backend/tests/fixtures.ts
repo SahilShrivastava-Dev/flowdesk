@@ -24,12 +24,15 @@ export const PHONES = {
 } as const;
 
 export async function resetData(): Promise<void> {
-  // Order matters — Message and Activity both reference Task and User.
+  // Order matters — Message and Activity both reference Task and User, and
+  // Task now references Contact and Invoice.
   await prisma.whatsAppCommand.deleteMany();
   await prisma.conversationState.deleteMany();
   await prisma.message.deleteMany();
   await prisma.activity.deleteMany();
   await prisma.task.deleteMany();
+  await prisma.invoice.deleteMany();
+  await prisma.contact.deleteMany();
   await prisma.user.deleteMany();
 }
 
@@ -136,6 +139,9 @@ export const CMD = {
 } as const;
 
 export const CMD_PHONES = {
+  // The Admin needs a number of their own: outreach is Admin-only by default
+  // (WA_OUTREACH_ROLES), so without one nothing in that path is reachable.
+  admin:     '919100000001',
   sahil:     '919100000010',
   rival:     '919100000011',
   vikranthS: '919100000201',
@@ -153,7 +159,7 @@ export async function seedCommandOrg(): Promise<void> {
   const base = { passwordHash: 'x', preferredLanguage: 'en', avatar: '', color: '' };
 
   await prisma.user.create({
-    data: { ...base, id: CMD.admin, name: 'Admin One', email: 'admin@test.io', role: 'Admin' },
+    data: { ...base, id: CMD.admin, name: 'Admin One', email: 'admin@test.io', role: 'Admin', phone: CMD_PHONES.admin },
   });
   await prisma.user.create({
     data: { ...base, id: CMD.sahil, name: 'Sahil Mehta', email: 'sahil@test.io', role: 'Manager', reportingToId: CMD.admin, phone: CMD_PHONES.sahil },
@@ -270,4 +276,85 @@ export function batchedMessages(from: string, bodies: string[]) {
       }],
     }],
   };
+}
+
+// ─── External parties ─────────────────────────────────────────────────────────
+
+export const PARTY = {
+  ramesh:    'C001',   // customer who owes us — two invoices
+  rameshAlt: 'C002',   // deliberately similar name: the ambiguity case
+  urja:      'C003',   // buyer, samples go to them
+  metro:     'C004',   // vendor WE owe — drives the opposite template
+  optedOut:  'C005',   // has replied STOP
+} as const;
+
+export const PARTY_PHONES = {
+  ramesh:    '919876543210',
+  rameshAlt: '919812345678',
+  urja:      '919090909090',
+  metro:     '919619608095',
+  optedOut:  '919700112233',
+} as const;
+
+export const INVOICE = {
+  open:    'IV001',   // INV-102, they owe us
+  partial: 'IV002',   // INV-2231, part paid
+  payable: 'IV003',   // BILL-4471, we owe them
+} as const;
+
+/**
+ * External parties on top of `seedCommandOrg`.
+ *
+ * Two near-identical names are seeded on purpose: "Ramesh Traders" and "Ramesh
+ * Textile Traders" are the ambiguity the brief names explicitly, and a suite
+ * without them would never exercise the "which one do you mean?" path that
+ * decides who receives a demand for money.
+ */
+export async function seedParties(): Promise<void> {
+  const base = { preferredLanguage: 'en', ownerId: CMD.admin };
+
+  await prisma.contact.createMany({
+    data: [
+      { ...base, id: PARTY.ramesh, name: 'Ramesh Traders', companyName: 'Ramesh Traders Pvt Ltd',
+        phone: PARTY_PHONES.ramesh, type: 'customer', address: 'Jaipur',
+        aliases: ['रमेश ट्रेडर्स', 'RT'], optInAt: new Date('2026-07-02') },
+      { ...base, id: PARTY.rameshAlt, name: 'Ramesh Textile Traders', companyName: 'Ramesh Textiles',
+        phone: PARTY_PHONES.rameshAlt, type: 'customer', address: 'Surat' },
+      { ...base, id: PARTY.urja, name: 'Urja Vart', companyName: 'Urja Vart Textiles',
+        phone: PARTY_PHONES.urja, type: 'buyer', aliases: ['Urja'] },
+      { ...base, id: PARTY.metro, name: 'Metro Logistics',
+        phone: PARTY_PHONES.metro, type: 'vendor' },
+      { ...base, id: PARTY.optedOut, name: 'Deccan Stones',
+        phone: PARTY_PHONES.optedOut, type: 'supplier', optOutAt: new Date('2026-08-01') },
+    ],
+  });
+
+  await prisma.invoice.createMany({
+    data: [
+      { id: INVOICE.open, number: 'INV-102', contactId: PARTY.ramesh,
+        amount: 25000, balance: 25000, dueDate: new Date('2026-09-05'),
+        status: 'open', payable: false, createdById: CMD.admin },
+      { id: INVOICE.partial, number: 'INV-2231', contactId: PARTY.ramesh,
+        amount: 60000, balance: 45000, dueDate: new Date('2026-08-20'),
+        status: 'partial', payable: false, createdById: CMD.admin },
+      // payable: we owe THEM. Picks the advice template, not the chase.
+      { id: INVOICE.payable, number: 'BILL-4471', contactId: PARTY.metro,
+        amount: 45000, balance: 45000, dueDate: new Date('2026-09-12'),
+        status: 'open', payable: true, createdById: CMD.admin },
+    ],
+  });
+}
+
+/**
+ * A quick-reply tap on one of our templates, as Meta delivers it.
+ *
+ * Meta sends the button LABEL back — there is no separate payload for a
+ * template quick reply — which is why `contactReplyService` keys its map on
+ * the exact approved label strings in both languages.
+ */
+export function buttonReply(from: string, label: string, id = nextWamid()) {
+  return envelope({
+    from, id, type: 'button', timestamp: '0',
+    button: { text: label, payload: label },
+  });
 }

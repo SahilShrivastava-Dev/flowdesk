@@ -219,39 +219,14 @@ curl -X POST \
 
 ## WhatsApp Message Templates
 
-Create in Meta Business Manager → WhatsApp → Message Templates:
+**See [`WHATSAPP_TEMPLATES.md`](WHATSAPP_TEMPLATES.md)** — every template, both
+languages, with the parameter order the code actually passes.
 
-**`task_assignment`** (Category: Utility)
-```
-You've been assigned a new task:
-
-*{{1}}*
-Deadline: {{2}}
-
-Reply with:
-• *done* — mark as complete
-• *delay* — request more time
-• *issue <reason>* — flag a problem
-```
-
-**`task_escalation`** (Category: Utility)
-```
-⚠️ Overdue task alert:
-
-Hi {{1}}, your task *{{2}}* is past its deadline.
-
-Reply immediately:
-• *done* — if complete
-• *delay* — to request more time
-• *issue <reason>* — to flag a blocker
-```
-
-Each template is submitted twice — `<name>_en` and `<name>_hi` — with the matching
-language selected in Meta. `APPROVED_LANGS` in `whatsappService.ts` is the list of
-languages that actually exist; anything else falls back to English rather than being
-sent to a template name Meta has never heard of.
-
----
+That file is the single source of truth. This section, `SETUP.md` and
+`ARCHITECTURE.md` each used to carry their own copy and had drifted into three
+different answers about the same templates. Meta renders parameters
+positionally, so a template whose order differs from the code produces a message
+that reads perfectly and states the wrong facts.
 
 ## API Reference
 

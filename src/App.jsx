@@ -12,6 +12,7 @@ import EmployeeDashboard from './views/EmployeeDashboard.jsx';
 import TasksView         from './views/TasksView.jsx';
 import AnalyticsView     from './views/AnalyticsView.jsx';
 import TeamView          from './views/TeamView.jsx';
+import PartiesView       from './views/PartiesView.jsx';
 import EscalationsView   from './views/EscalationsView.jsx';
 import ApprovalsView     from './views/ApprovalsView.jsx';
 import WhatsAppHub       from './views/WhatsAppHub.jsx';
@@ -29,6 +30,7 @@ const NAV_BY_ROLE = {
     { id: 'Tasks',       label: 'Tasks'        },
     { id: 'Analytic',    label: 'Analytic'     },
     { id: 'Team',        label: 'Team'         },
+    { id: 'Parties',     label: 'Parties'      },
     { id: 'Escalations', label: 'Timeline'  },
     { id: 'Tracker',     label: 'Tracker'      },
   ],
@@ -37,6 +39,7 @@ const NAV_BY_ROLE = {
     { id: 'Tasks',     label: 'Tasks'     },
     { id: 'Approvals', label: 'Approvals' },
     { id: 'Team',      label: 'Team'      },
+    { id: 'Parties',   label: 'Parties'   },
     { id: 'Tracker',   label: 'Tracker'   },
   ],
   Employee: [
@@ -348,6 +351,7 @@ function FlowDeskShell({ onLogout }) {
         case 'Tasks':       return <TasksView        {...props} />;
         case 'Analytic':    return <AnalyticsView />;
         case 'Team':        return <TeamView />;
+        case 'Parties':     return <PartiesView />;
         case 'Escalations': return <EscalationsView  {...props} />;
         case 'Tracker':     return <WhatsAppHub {...trackerProps} />;
         default:            return <AdminDashboard   {...props} />;
@@ -359,6 +363,7 @@ function FlowDeskShell({ onLogout }) {
         case 'Tasks':     return <TasksView        {...props} />;
         case 'Approvals': return <ApprovalsView    {...props} />;
         case 'Team':      return <TeamView />;
+        case 'Parties':   return <PartiesView />;
         case 'Tracker':   return <WhatsAppHub {...trackerProps} />;
         default:          return <ManagerDashboard {...props} />;
       }

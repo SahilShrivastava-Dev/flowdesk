@@ -23,6 +23,29 @@ describe('normaliseName', () => {
   it('strips accents, case and punctuation', () => {
     expect(normaliseName('Vikrànth  Sharma.')).toBe('vikranth sharma');
   });
+
+  // Before transliteration the whitelist deleted every Devanagari codepoint,
+  // so each of these normalised to '' and could never match anything.
+  it.each([
+    ['रमेश',              'ramesh'],
+    ['साहिल',             'sahil'],
+    ['विक्रांत',           'vikrant'],
+    ['आशीष',              'ashish'],
+    ['सुनील',             'sunil'],
+    ['राजेश शर्मा',        'rajesh sharma'],
+  ])('reduces the Devanagari %j to %j', (raw, expected) => {
+    expect(normaliseName(raw)).toBe(expected);
+  });
+
+  it('handles a mixed-script name', () => {
+    expect(normaliseName('रमेश Traders')).toBe('ramesh traders');
+  });
+
+  it('never returns empty for a real name', () => {
+    for (const name of ['रमेश', 'किरण', 'गौरव', 'वेदांत']) {
+      expect(normaliseName(name)).not.toBe('');
+    }
+  });
 });
 
 describe('scoreName', () => {
@@ -112,5 +135,43 @@ describe('resolveName — refusals', () => {
 
   it.each(['', '   '])('finds nobody for %j', (query) => {
     expect(resolveName(query, [VIKRANTH_S]).status).toBe('not_found');
+  });
+});
+
+// Cross-script resolution. A contact saved in one script has to be reachable
+// by a sender typing the other — which is the whole point of the
+// transliteration step, and was impossible before it.
+describe('resolveName across scripts', () => {
+  const RAMESH_HI = { id: 'C1', name: 'रमेश' };
+  const SAHIL_HI  = { id: 'C2', name: 'साहिल' };
+
+  it('matches a Roman query against a Devanagari name', () => {
+    const r = resolveName('Ramesh', [RAMESH_HI, SAHIL_HI]);
+    expect(r.status).toBe('matched');
+    expect(r.match?.user.id).toBe('C1');
+    expect(r.requiresConfirmation).toBe(false);   // exact — no "did you mean?"
+  });
+
+  it('matches a Devanagari query against a Roman name', () => {
+    const r = resolveName('रमेश', [{ id: 'C9', name: 'Ramesh Traders' }]);
+    expect(r.status).toBe('matched');
+    expect(r.match?.user.id).toBe('C9');
+  });
+
+  it('matches Devanagari against Devanagari', () => {
+    const r = resolveName('साहिल', [RAMESH_HI, SAHIL_HI]);
+    expect(r.match?.user.id).toBe('C2');
+  });
+
+  it('tolerates a spelling difference across scripts', () => {
+    // विक्रांत transliterates to "vikrant"; the roster spells it "Vikranth".
+    const r = resolveName('विक्रांत', [VIKRANTH_S, VEDANT]);
+    expect(r.status).toBe('matched');
+    expect(r.match?.user.id).toBe('U1');
+    expect(r.requiresConfirmation).toBe(true);    // near, not exact — confirm
+  });
+
+  it('still finds nobody when nobody matches', () => {
+    expect(resolveName('रमेश', [VEDANT, PRIYA]).status).toBe('not_found');
   });
 });

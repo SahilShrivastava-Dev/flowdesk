@@ -99,6 +99,11 @@ export async function listConversations(req: Request, res: Response): Promise<vo
     const stats = taskStats.get(u.id) ?? { open: 0, overdue: 0 };
 
     return {
+      // `party` distinguishes a colleague from an outside contact. The Hub
+      // renders both in one list because WhatsApp does — one thread per phone
+      // number — but what you can DO in a thread differs: a contact holds no
+      // tasks, so re-attribution and the task chips do not apply to them.
+      party:  'user' as const,
       userId: u.id,
       name:   u.name,
       avatar: u.avatar,
@@ -120,15 +125,147 @@ export async function listConversations(req: Request, res: Response): Promise<vo
     };
   });
 
+  const contactRows = await listContactConversations(userId, role, now);
+
+  const allRows = [...rows, ...contactRows];
+
   // Most recent conversation first; people you've never messaged fall to the
   // bottom in alphabetical order (the findMany above already sorted by name).
-  rows.sort((a, b) => {
+  allRows.sort((a, b) => {
     const at = a.lastMessage?.createdAt?.getTime() ?? -Infinity;
     const bt = b.lastMessage?.createdAt?.getTime() ?? -Infinity;
     return bt - at;
   });
 
-  res.json(rows);
+  res.json(allRows);
+}
+
+/**
+ * The contact side of the conversation list.
+ *
+ * Split out rather than folded into the query above because almost nothing is
+ * shared: contacts have no role, no reporting line, no assigned tasks and no
+ * attribution state. Forcing both through one code path would mean a dozen
+ * null branches to save one loop.
+ *
+ * Scoped exactly like `visibleContacts` — an Admin sees all, a Manager sees
+ * the ones they own, an Employee sees none. Employees do not message
+ * customers, and a list they cannot act on is only a leak of who our customers
+ * are.
+ */
+async function listContactConversations(
+  userId: string,
+  role: string,
+  now: Date,
+): Promise<ConversationRow[]> {
+  if (role === 'Employee') return [];
+
+  const contacts = await prisma.contact.findMany({
+    where: {
+      archivedAt: null,
+      ...(role === 'Manager' && { ownerId: userId }),
+    },
+    select: {
+      id: true, name: true, companyName: true, type: true, phone: true,
+      preferredLanguage: true, optOutAt: true,
+    },
+    orderBy: { name: 'asc' },
+  });
+  if (contacts.length === 0) return [];
+
+  const ids = contacts.map((c) => c.id);
+
+  const [lastPer, lastInboundPer, openTasks] = await Promise.all([
+    prisma.message.groupBy({
+      by: ['contactId'], where: { contactId: { in: ids } }, _max: { createdAt: true },
+    }),
+    prisma.message.groupBy({
+      by: ['contactId'],
+      where: { contactId: { in: ids }, direction: MessageDirection.inbound },
+      _max: { createdAt: true },
+    }),
+    prisma.task.findMany({
+      where:  { contactId: { in: ids }, status: { notIn: ['Done', 'Submitted'] } },
+      select: { contactId: true, deadline: true },
+    }),
+  ]);
+
+  const lastKeys = lastPer
+    .filter((g) => g._max.createdAt !== null && g.contactId !== null)
+    .map((g) => ({ contactId: g.contactId!, createdAt: g._max.createdAt! }));
+
+  const lastMessages = lastKeys.length
+    ? await prisma.message.findMany({
+        where:  { OR: lastKeys },
+        select: { ...MESSAGE_FIELDS, contactId: true },
+      })
+    : [];
+
+  const lastBy        = new Map(lastMessages.map((m) => [m.contactId, m]));
+  const lastInboundBy = new Map(lastInboundPer.map((g) => [g.contactId, g._max.createdAt]));
+
+  const taskStats = new Map<string, { open: number; overdue: number }>();
+  for (const t of openTasks) {
+    if (!t.contactId) continue;
+    const st = taskStats.get(t.contactId) ?? { open: 0, overdue: 0 };
+    st.open += 1;
+    if (t.deadline < now) st.overdue += 1;
+    taskStats.set(t.contactId, st);
+  }
+
+  return contacts.map((c) => {
+    const last  = lastBy.get(c.id) ?? null;
+    const stats = taskStats.get(c.id) ?? { open: 0, overdue: 0 };
+
+    return {
+      party:  'contact' as const,
+      userId: c.id,                       // the thread key, whichever side it is
+      name:   c.name,
+      avatar: '',
+      color:  'from-amber-400 to-amber-600',
+      role:   c.type,                     // "vendor" / "customer" — shown as the chip
+      companyName: c.companyName,
+      hasPhone: Boolean(c.phone),
+      // A party who opted out is listed but cannot be written to. Hiding them
+      // would lose the history of what was already sent.
+      optedOut: Boolean(c.optOutAt),
+      preferredLanguage: c.preferredLanguage,
+      reportingToId: null,
+      lastMessage: last && {
+        id: last.id,
+        preview: previewFor(last),
+        direction: last.direction,
+        kind: last.kind,
+        createdAt: last.createdAt,
+      },
+      session: computeSession(lastInboundBy.get(c.id) ?? null, now),
+      needsAttributionCount: 0,           // contacts hold no tasks to attribute to
+      openTaskCount: stats.open,
+      overdueCount:  stats.overdue,
+    };
+  });
+}
+
+/** The shape both halves of the conversation list produce. */
+interface ConversationRow {
+  party: 'user' | 'contact';
+  userId: string;
+  name: string;
+  avatar: string;
+  color: string;
+  role: string;
+  companyName?: string | null;
+  hasPhone: boolean;
+  optedOut?: boolean;
+  preferredLanguage?: string;
+  reportingToId: string | null;
+  lastMessage: {
+    id: string; preview: string; direction: MessageDirection; kind: string; createdAt: Date;
+  } | null;
+  session: ReturnType<typeof computeSession>;
+  needsAttributionCount: number;
+  openTaskCount: number;
+  overdueCount: number;
 }
 
 /**
@@ -224,7 +361,17 @@ export async function reattributeMessage(req: Request, res: Response): Promise<v
   });
   if (!message) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  if (!(await canAccessConversation(role, requesterId, message.userId))) {
+  // Re-attribution moves a message onto a task its sender holds. A contact
+  // holds no tasks — they are not in the hierarchy and never will be — so the
+  // operation has no meaning on their thread rather than merely no target.
+  // Saying so is better than a 400 claiming the task is not assigned to them.
+  if (!message.userId) {
+    res.status(400).json({ error: 'Messages from an external contact cannot be linked to a task this way' });
+    return;
+  }
+  const ownerId = message.userId;
+
+  if (!(await canAccessConversation(role, requesterId, ownerId))) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }
@@ -234,7 +381,7 @@ export async function reattributeMessage(req: Request, res: Response): Promise<v
   let newTask: { id: string; title: string } | null = null;
   if (taskId) {
     newTask = await prisma.task.findFirst({
-      where:  { id: taskId, assignedToId: message.userId },
+      where:  { id: taskId, assignedToId: ownerId },
       select: { id: true, title: true },
     });
     if (!newTask) {

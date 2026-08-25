@@ -32,6 +32,33 @@ export function computeSession(lastInboundAt: Date | null, now: Date = new Date(
   };
 }
 
+/**
+ * Which conversation a message belongs to.
+ *
+ * WhatsApp gives each phone number one thread, and that number belongs either
+ * to an employee or to an external contact — never both, which the
+ * `message_one_owner` check constraint enforces at the database level.
+ *
+ * This exists so the two dozen places that group, filter or scope messages ask
+ * "whose thread is this?" once, in one shape, instead of each testing
+ * `userId` for null and quietly disagreeing about what a null means. The
+ * `kind` discriminator is what callers switch on; `id` is what they group by.
+ */
+export interface ConversationKey {
+  kind: 'user' | 'contact';
+  id: string;
+}
+
+export function conversationKey(
+  msg: Pick<Message, 'userId' | 'contactId'>,
+): ConversationKey | null {
+  if (msg.userId)    return { kind: 'user',    id: msg.userId };
+  if (msg.contactId) return { kind: 'contact', id: msg.contactId };
+  // Unreachable while the check constraint holds. Returning null rather than
+  // throwing keeps a listing renderable if it ever does not.
+  return null;
+}
+
 type PreviewSource = Pick<Message, 'kind' | 'text' | 'transcription' | 'mediaUrl'>;
 
 /** One-line summary for the conversation list. */
@@ -78,6 +105,26 @@ export async function resolveUserByPhone(phone: string) {
   return prisma.user.findFirst({
     where: { phone: { contains: last10 } },
     select: { id: true, name: true, phone: true, role: true, reportingToId: true, preferredLanguage: true },
+  });
+}
+
+/**
+ * Match a Meta phone number to an external contact.
+ *
+ * The same last-ten-digits comparison `resolveUserByPhone` uses, and for the
+ * same reason — Meta sends digits-only E.164 while stored numbers vary.
+ *
+ * Called only after the user lookup misses. A number cannot belong to both:
+ * `contactService` refuses to save a contact on a live employee's number, and
+ * a partial unique index enforces it in the database.
+ */
+export async function resolveContactByPhone(phone: string) {
+  const last10 = phone.replace(/\D/g, '').slice(-10);
+  if (last10.length < 10) return null;
+
+  return prisma.contact.findFirst({
+    where:  { phone: { contains: last10 }, archivedAt: null },
+    select: { id: true, name: true, phone: true, preferredLanguage: true, ownerId: true },
   });
 }
 

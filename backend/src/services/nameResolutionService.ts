@@ -1,3 +1,5 @@
+import { transliterate } from '../lib/devanagari';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Turning "Vikrant" into a specific employee — or refusing to.
 //
@@ -52,11 +54,20 @@ const CONSIDER = 0.6;
 const MIN_PREFIX = 4;
 
 /**
- * Lowercase, strip accents, drop punctuation, collapse whitespace.
- * "Vikrànth  Sharma." → "vikranth sharma"
+ * Reduce a name to a matching key: transliterate Devanagari, strip accents,
+ * lowercase, drop punctuation, collapse whitespace.
+ *
+ *   "Vikrànth  Sharma."  →  "vikranth sharma"
+ *   "रमेश"                →  "ramesh"
+ *
+ * The transliteration step has to come first. The whitelist below keeps only
+ * `[a-z0-9\s]`, so before this a Devanagari name was deleted down to the empty
+ * string — it scored 0 against every candidate, could never be resolved, and
+ * could never be matched by its own Roman spelling either, since the two
+ * scripts share no codepoints for Levenshtein to work with.
  */
 export function normaliseName(raw: string): string {
-  return raw
+  return transliterate(raw ?? '')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')   // combining accents
     .toLowerCase()

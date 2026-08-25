@@ -24,6 +24,24 @@ const TEMPLATE = {
   ESCALATION:           'task_escalation',
   ESCALATION_SUPERVISOR: 'task_escalation_supervisor',
   UPDATE_WAITING:       'update_waiting',
+
+  // ─── Outreach ─────────────────────────────────────────────────────────────
+  // Sent to an external party, never to an employee. Submitted to Meta on
+  // 25 Aug 2026; the parameter order below is copied from what was actually
+  // approved, not from what the spec proposed, because Meta renders positional
+  // parameters and a mismatch silently produces a message with the amount and
+  // the invoice number swapped.
+  //
+  // Every one of these takes exactly five parameters, and in all five the
+  // shape is the same:
+  //   {{1}} = who we are writing to      {{4}} = the reference or detail
+  //   {{2}} = who it is from (us)        {{5}} = the date
+  //   {{3}} = the headline value
+  SAMPLE_DISPATCH:      'sample_dispatch',
+  PAYMENT_ADVICE_VENDOR: 'payment_advice_vendor',
+  PAYMENT_DUE_REMINDER: 'payment_due_reminder',
+  STOCK_CHECK_REQUEST:  'stock_check_request',
+  SALES_ORDER_PLACED:   'sales_order_placed',
 } as const;
 
 function templateFor(base: string, preferredLang: string): { name: string; langCode: string } {
@@ -135,6 +153,130 @@ export async function sendUpdateWaitingNotification(
 ): Promise<SendResult> {
   const t = templateFor(TEMPLATE.UPDATE_WAITING, preferredLang);
   return sendWhatsAppLocalized(to, t.name, [senderName], t.langCode);
+}
+
+// ─── Outreach senders ─────────────────────────────────────────────────────────
+//
+// One function per approved template. They exist as named functions rather than
+// a single `send(templateName, params)` so the parameter ORDER is stated once,
+// next to the body it fills, instead of being remembered correctly at every
+// call site. Meta renders positionally: passing the due date where the amount
+// belongs produces a message that reads perfectly and says the wrong thing.
+
+/**
+ * "Hi {{1}}, this is an update from {{2}}. We are sending you the following
+ *  sample(s): {{3}}. Expected to reach you by {{4}}. Reference: {{5}}"
+ *
+ * Buttons: Received · Not Received yet
+ */
+export async function sendSampleDispatchNotice(
+  to:            string,
+  contactName:   string,
+  fromName:      string,
+  sampleDescription: string,
+  expectedBy:    string,
+  reference:     string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.SAMPLE_DISPATCH, preferredLang);
+  return sendWhatsAppLocalized(
+    to, t.name, [contactName, fromName, sampleDescription, expectedBy, reference], t.langCode,
+  );
+}
+
+/**
+ * WE OWE THEM. "Hi {{1}}, a payment update from {{2}}. Amount: {{3}}.
+ *  Against: {{4}}. Scheduled for: {{5}}."
+ *
+ * Buttons: Details Correct · Need to update
+ *
+ * Not interchangeable with `sendPaymentDueReminder` below. This one tells a
+ * vendor money is coming; that one asks a customer for money. Sending the
+ * wrong one is not a wording error, it is telling somebody the opposite of
+ * the truth about their account — which is why they are two functions and two
+ * templates rather than one with a flag.
+ */
+export async function sendPaymentAdviceToVendor(
+  to:            string,
+  contactName:   string,
+  fromName:      string,
+  amount:        string,
+  reference:     string,
+  scheduledFor:  string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.PAYMENT_ADVICE_VENDOR, preferredLang);
+  return sendWhatsAppLocalized(
+    to, t.name, [contactName, fromName, amount, reference, scheduledFor], t.langCode,
+  );
+}
+
+/**
+ * THEY OWE US. "Hi {{1}}, this is a payment reminder from {{2}}. Amount
+ *  pending: {{3}}. Against: {{4}}. Due date: {{5}}."
+ *
+ * Buttons: Payment done · Need more time · Invoice Query
+ */
+export async function sendPaymentDueReminder(
+  to:            string,
+  contactName:   string,
+  fromName:      string,
+  amount:        string,
+  reference:     string,
+  dueDate:       string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.PAYMENT_DUE_REMINDER, preferredLang);
+  return sendWhatsAppLocalized(
+    to, t.name, [contactName, fromName, amount, reference, dueDate], t.langCode,
+  );
+}
+
+/**
+ * "Hi {{1}}, {{2}} would like to check availability. Item: {{3}}.
+ *  Quantity: {{4}}. Required by: {{5}}."
+ *
+ * Buttons: In stock · Out of stock · Will confirm
+ */
+export async function sendStockCheckRequest(
+  to:            string,
+  contactName:   string,
+  fromName:      string,
+  item:          string,
+  quantity:      string,
+  requiredBy:    string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.STOCK_CHECK_REQUEST, preferredLang);
+  return sendWhatsAppLocalized(
+    to, t.name, [contactName, fromName, item, quantity, requiredBy], t.langCode,
+  );
+}
+
+/**
+ * "Hi {{1}}, {{2}} has placed the following order. Order: {{3}}.
+ *  Details: {{4}}. Delivery expected by: {{5}}."
+ *
+ * Buttons: Confirmed · Query
+ *
+ * Note the parameter order, which is the reverse of what reads naturally:
+ * the APPROVED template puts the line summary in {{3}} ("Order: 30 US Polo
+ * Shorts") and the reference in {{4}} ("Details: ORDERID-1234"). The argument
+ * names below follow the approved template, not the label text.
+ */
+export async function sendSalesOrderPlaced(
+  to:            string,
+  contactName:   string,
+  fromName:      string,
+  lineSummary:   string,
+  orderReference: string,
+  deliveryBy:    string,
+  preferredLang: string = 'en',
+): Promise<SendResult> {
+  const t = templateFor(TEMPLATE.SALES_ORDER_PLACED, preferredLang);
+  return sendWhatsAppLocalized(
+    to, t.name, [contactName, fromName, lineSummary, orderReference, deliveryBy], t.langCode,
+  );
 }
 
 /**

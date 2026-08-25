@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   initialTasks, initialNotifications, initialConversations, initialThreads,
+  initialContacts, initialInvoices,
   users as mockUsers, setRuntimeUsers,
 } from '../data/mockData.js';
 import { api } from '../lib/api.js';
@@ -397,11 +398,27 @@ export function AppProvider({ children, loggedInUser }) {
     finally { setConvLoading(false); }
   }, []);
 
+  /**
+   * Load one thread.
+   *
+   * A thread key is either a user id or a contact id, and the two live behind
+   * different endpoints. The party is read from the conversation list rather
+   * than passed in by every caller, so the six existing call sites are
+   * unchanged — a thread that is not in the list yet is a colleague, which is
+   * the pre-existing behaviour.
+   */
   const fetchThread = useCallback(async (userId, { before } = {}) => {
     if (!usingApi || !userId) return;
     try {
-      const qs = new URLSearchParams({ limit: '50', ...(before && { before }) });
-      const data = await api.get(`/api/conversations/${userId}/messages?${qs}`);
+      const isContact = conversations.some((c) => c.userId === userId && c.party === 'contact');
+
+      // Contact threads are not paginated: an external party has tens of
+      // messages, not thousands, and the endpoint returns the lot.
+      const data = isContact
+        ? await api.get(`/api/contacts/${userId}/messages`)
+        : await api.get(`/api/conversations/${userId}/messages?${new URLSearchParams({
+            limit: '50', ...(before && { before }),
+          })}`);
       if (!data) return;
 
       setThreads((prev) => {
@@ -417,7 +434,7 @@ export function AppProvider({ children, loggedInUser }) {
         };
       });
     } catch (err) { console.error(err); }
-  }, []);
+  }, [conversations]);
 
   const loadMoreMessages = useCallback(async (userId) => {
     const t = threads[userId];
@@ -501,7 +518,13 @@ export function AppProvider({ children, loggedInUser }) {
     if (!usingApi) return { ok: true, mode: 'free_text' };
 
     try {
-      const res = await api.post('/api/whatsapp/send', { userId, taskId, message: text });
+      // A contact thread goes to a different endpoint. Colleagues get a
+      // template fallback when their window has closed; an external party does
+      // not — see the comment on the contact send route for why.
+      const isContact = conversations.some((c) => c.userId === userId && c.party === 'contact');
+      const res = isContact
+        ? await api.post(`/api/contacts/${userId}/messages`, { message: text })
+        : await api.post('/api/whatsapp/send', { userId, taskId, message: text });
       setThreads((prev) => ({
         ...prev,
         [userId]: {
@@ -530,7 +553,7 @@ export function AppProvider({ children, loggedInUser }) {
       }));
       throw err;
     }
-  }, [activeUser, fetchConversations, fetchThread]);
+  }, [activeUser, conversations, fetchConversations, fetchThread]);
 
   /** Correct which task a message belongs to (or unlink it entirely). */
   const reattributeMessage = useCallback(async (userId, messageId, taskId) => {
@@ -557,6 +580,115 @@ export function AppProvider({ children, loggedInUser }) {
   // ── Search ─────────────────────────────────────────────────────────
   const [search, setSearch] = useState('');
 
+  // ── External parties and invoices ──────────────────────────────────
+  //
+  // Loaded lazily: the directory is a page most sessions never open, and a
+  // fetch on every login would be two more requests before the dashboard
+  // paints. `contactsLoaded` is what stops a re-open re-fetching.
+  const [contacts, setContacts] = useState(usingApi ? [] : initialContacts);
+  const [invoices, setInvoices] = useState(usingApi ? [] : initialInvoices);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const contactsLoaded = useRef(!usingApi);
+
+  const loadContacts = useCallback(async ({ force = false } = {}) => {
+    if (!usingApi) return;
+    if (contactsLoaded.current && !force) return;
+    setContactsLoading(true);
+    try {
+      const [c, i] = await Promise.all([
+        api.get('/api/contacts'),
+        api.get('/api/invoices'),
+      ]);
+      setContacts(c ?? []);
+      setInvoices(i ?? []);
+      contactsLoaded.current = true;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setContactsLoading(false);
+    }
+  }, []);
+
+  const addContact = useCallback(async (data) => {
+    if (usingApi) {
+      const created = await api.post('/api/contacts', data);
+      setContacts((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      return created;
+    }
+    const created = {
+      id: `C${Date.now()}`, aliases: [], optInAt: null, optOutAt: null,
+      archivedAt: null, createdAt: new Date().toISOString(),
+      openInvoiceCount: 0, outstandingBalance: 0, lastMessageAt: null,
+      ownerId: activeUser?.id ?? 'U101', preferredLanguage: 'en', type: 'other',
+      ...data,
+    };
+    setContacts((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+    return created;
+  }, [activeUser]);
+
+  const updateContact = useCallback(async (id, patch) => {
+    if (usingApi) {
+      const updated = await api.patch(`/api/contacts/${id}`, patch);
+      setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, ...updated } : c)));
+      return updated;
+    }
+    setContacts((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  }, []);
+
+  const archiveContact = useCallback(async (id) => {
+    if (usingApi) {
+      await api.delete(`/api/contacts/${id}`);
+    }
+    // Removed from the list either way — archived is not deleted, but it is
+    // not somebody you can message today, which is what this list is for.
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  const addInvoice = useCallback(async (data) => {
+    if (usingApi) {
+      const created = await api.post('/api/invoices', data);
+      setInvoices((prev) => [...prev, created]);
+      // The outstanding total on the contact row is now stale.
+      await loadContacts({ force: true });
+      return created;
+    }
+    const contact = contacts.find((c) => c.id === data.contactId);
+    const created = {
+      id: `INV${Date.now()}`, currency: 'INR', status: 'open', payable: false,
+      notes: '', balance: data.amount, ...data,
+      contact: contact
+        ? { id: contact.id, name: contact.name, companyName: contact.companyName, type: contact.type }
+        : null,
+    };
+    setInvoices((prev) => [...prev, created]);
+    return created;
+  }, [contacts, loadContacts]);
+
+  const updateInvoice = useCallback(async (id, patch) => {
+    if (usingApi) {
+      const updated = await api.patch(`/api/invoices/${id}`, patch);
+      setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...updated } : i)));
+      await loadContacts({ force: true });
+      return updated;
+    }
+    setInvoices((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  }, [loadContacts]);
+
+  /** The full record behind one party — invoices, tasks and the message thread. */
+  const fetchContactDetail = useCallback(async (id) => {
+    if (!usingApi) {
+      const contact = contacts.find((c) => c.id === id);
+      if (!contact) return null;
+      return {
+        ...contact,
+        invoices: invoices.filter((i) => i.contactId === id),
+        tasks: tasks.filter((t) => t.contactId === id),
+        messages: [],
+      };
+    }
+    return api.get(`/api/contacts/${id}`);
+  }, [contacts, invoices, tasks]);
+
   const value = {
     theme, toggleTheme,
     role, setRole, activeUser,
@@ -566,6 +698,8 @@ export function AppProvider({ children, loggedInUser }) {
     conversations, convLoading, threads, activeConvUserId, setActiveConvUserId,
     fetchThread, loadMoreMessages, sendWhatsApp, reattributeMessage,
     search, setSearch,
+    contacts, invoices, contactsLoading, loadContacts, fetchContactDetail,
+    addContact, updateContact, archiveContact, addInvoice, updateInvoice,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

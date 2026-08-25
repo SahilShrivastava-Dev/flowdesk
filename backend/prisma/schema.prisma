@@ -32,6 +32,38 @@ enum Priority {
   High
 }
 
+/// What kind of work a task is.
+///
+/// A column rather than a `customFields` key so "show me every open payment
+/// follow-up" is an index scan rather than a scan over JSON. `internal` is the
+/// default, so every task that existed before this — and every task the
+/// dashboard creates without saying otherwise — is unaffected.
+enum TaskKind {
+  internal
+  sample_dispatch
+  payment_followup
+  stock_check
+  sales
+}
+
+/// What an external party is to us. Drives which template a message to them
+/// uses and, for payments, which direction the money is going.
+enum ContactType {
+  customer
+  vendor
+  seller
+  supplier
+  buyer
+  other
+}
+
+enum InvoiceStatus {
+  open
+  partial
+  paid
+  cancelled
+}
+
 enum MessageDirection {
   inbound
   outbound
@@ -151,6 +183,9 @@ model User {
   commands          WhatsAppCommand[]  @relation("CommandSender")
   /// At most one in-flight clarification/confirmation per person.
   conversationState ConversationState? @relation("ConvState")
+
+  /// External parties this person is responsible for.
+  contacts Contact[] @relation("ContactOwner")
 }
 
 model Task {
@@ -185,6 +220,24 @@ model Task {
   sourceTask   Task?   @relation("TaskCopies", fields: [sourceTaskId], references: [id], onDelete: SetNull)
   copies       Task[]  @relation("TaskCopies")
 
+  /// What kind of work this is. Defaults to `internal`, so every row that
+  /// existed before this — and every task the dashboard creates without saying
+  /// otherwise — keeps its current meaning.
+  kind TaskKind @default(internal)
+
+  /// The external party this task is ABOUT, when there is one: the customer
+  /// whose dues are being collected, the seller being asked about stock.
+  ///
+  /// Never the assignee. `assignedToId` stays required and stays a `User`,
+  /// because somebody on our team always owns chasing this. SetNull rather
+  /// than Cascade — removing a contact must not delete the work done for them.
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  /// The bill this task is chasing, for payment follow-ups.
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
   status          TaskStatus @default(Pending)
   priority        Priority   @default(Medium)
   deadline        DateTime
@@ -199,6 +252,9 @@ model Task {
   messages   Message[]
 
   @@index([sourceTaskId])
+  @@index([kind, status])
+  @@index([contactId])
+  @@index([invoiceId])
 }
 
 /// One person's hold on a task.
@@ -270,12 +326,24 @@ model Message {
   /// Conversation owner — whoever owns the phone number this thread belongs to.
   /// NOT the actor. On outbound messages the actor is the manager; the owner is
   /// still the employee being messaged.
-  userId String
-  user   User   @relation("ConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
+  ///
+  /// Nullable since contacts arrived: a thread with an external party has no
+  /// owning employee. EXACTLY ONE of `userId` and `contactId` is set, enforced
+  /// by a check constraint (prisma/sql/) because Prisma cannot express XOR.
+  /// Read it through `conversationKey()` rather than testing for null at each
+  /// of the two dozen call sites.
+  userId String?
+  user   User?   @relation("ConversationOwner", fields: [userId], references: [id], onDelete: Cascade)
 
-  /// Who produced this message. inbound → equals userId; outbound → the sender.
-  senderId String
-  sender   User   @relation("MessageSender", fields: [senderId], references: [id])
+  /// Conversation owner when the other end is an external party.
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  /// Who produced this message. Null when a contact sent it — they are not a
+  /// `User` and never will be. For outbound to a contact this is the employee
+  /// who caused the send.
+  senderId String?
+  sender   User?   @relation("MessageSender", fields: [senderId], references: [id])
 
   direction MessageDirection
   kind      MessageKind      @default(text)
@@ -320,6 +388,8 @@ model Message {
   @@index([userId, direction, createdAt])
   @@index([taskId, createdAt])
   @@index([userId, needsAttribution])
+  @@index([contactId, createdAt])
+  @@index([contactId, direction, createdAt])
 }
 
 /// Audit row for a management command issued over WhatsApp ("assign TSK-1059
@@ -419,4 +489,106 @@ model ConversationState {
   createdAt DateTime @default(now())
 
   @@index([expiresAt])
+}
+
+/// An external party: a customer, vendor, seller, supplier or buyer.
+///
+/// Deliberately NOT a `User`. A `User` has a `passwordHash`, a `Role` and a
+/// `reportingToId`; it appears in team lists, workload charts, the org tree,
+/// `assignableUsers()` and the assignee picker, and it can be given tasks.
+/// Putting a vendor in that table would put them in every one of those places,
+/// and the only thing they actually share with an employee is a phone number.
+///
+/// `ownerId` is who at our end is responsible for this relationship — it is
+/// what makes "which contacts may this Admin message?" answerable, and that
+/// question is the permission boundary for outbound messaging exactly as
+/// `assignableUsers()` is for task assignment.
+model Contact {
+  id          String      @id @default(cuid())
+  name        String
+  companyName String?
+  /// Normalised to E.164 digits before it is stored, so the inbound webhook's
+  /// last-ten-digits match and outbound sends agree on one representation.
+  ///
+  /// Unique across contacts, and refused at creation when it collides with a
+  /// live `User.phone` — otherwise an inbound message from that number would
+  /// have two possible senders and the webhook would have to guess.
+  phone       String      @unique
+  type        ContactType @default(other)
+  email       String?
+  address     String?
+  notes       String      @default("")
+
+  /// Other names this party is known by — a trading name, a short form, the
+  /// other script. Fed to name resolution as extra candidates pointing at this
+  /// same row, which is how "Ramesh Traders" and "रमेश ट्रेडर्स" both land here.
+  aliases String[] @default([])
+
+  /// Whatever account, party or GST code the client already uses. Never
+  /// generated here — this is a place to record theirs, not to invent ours.
+  externalRef String?
+
+  /// Same "en" | "hi" contract as User.preferredLanguage: picks the template
+  /// suffix, falling back to English when the language is not approved.
+  preferredLanguage String @default("en")
+
+  ownerId String
+  owner   User   @relation("ContactOwner", fields: [ownerId], references: [id])
+
+  /// Consent to be messaged. Recorded but NOT currently required to send —
+  /// see WA_REQUIRE_OPTIN. `optOutAt` is enforced unconditionally: a party who
+  /// replies STOP is never messaged again, which is not the same question as
+  /// whether they opted in to begin with.
+  optInAt  DateTime?
+  optOutAt DateTime?
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  invoices Invoice[]
+  tasks    Task[]
+  messages Message[]
+
+  @@index([ownerId, archivedAt])
+  @@index([type, archivedAt])
+}
+
+/// A bill, in either direction.
+///
+/// Exists so a reminder can quote what is actually outstanding rather than
+/// whatever number somebody typed into WhatsApp. When a command names a
+/// reference we hold, the amount comes from here and the typed one is ignored;
+/// when it names one we do not, the sender is told so before anything is sent.
+model Invoice {
+  id        String  @id @default(cuid())
+  /// "INV-102". Unique, so a reference resolves to exactly one bill.
+  number    String  @unique
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  /// Decimal, never Float. Binary floating point cannot represent 0.10, and
+  /// this number goes into a message asking somebody for money.
+  amount   Decimal @db.Decimal(14, 2)
+  currency String  @default("INR")
+  /// What is still outstanding. Reminders quote THIS, not `amount` — a bill
+  /// half paid should not be chased for its original value.
+  balance  Decimal @db.Decimal(14, 2)
+
+  dueDate DateTime
+  status  InvoiceStatus @default(open)
+
+  /// True when we owe them (a vendor bill), false when they owe us (a sales
+  /// invoice). Picks between the two payment templates, which say opposite
+  /// things and must never be swapped.
+  payable Boolean @default(false)
+
+  notes       String   @default("")
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tasks Task[]
+
+  @@index([contactId, status])
+  @@index([status, dueDate])
 }

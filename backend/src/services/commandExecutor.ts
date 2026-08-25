@@ -1,4 +1,4 @@
-import { ActionChannel, CommandStatus } from '@prisma/client';
+import { ActionChannel, CommandStatus, TaskKind } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { checkRateLimit } from '../lib/rateLimit';
 import { ParsedCommand, parseCommand, parseWithRules } from './commandService';
@@ -15,7 +15,11 @@ import {
 } from './attachmentService';
 import { computeSession, getLastInbound } from './conversationService';
 import * as taskService from './taskService';
+import * as invoiceService from './invoiceService';
+import * as outreachService from './outreachService';
+import { contactCandidates, createContact } from './contactService';
 import { TaskOpError } from './taskService';
+import { ActionKey, Lang, action as phrase, fragment, langOf, t } from './replies';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The trusted layer.
@@ -40,6 +44,15 @@ export interface CommandActor {
   name:  string;
   role:  string;
   phone: string | null;
+  /**
+   * Which language to answer in. Optional so every existing construction site
+   * still compiles; absent means English, which is what they got before.
+   *
+   * Somebody who writes in Hindi and is answered in English has been
+   * understood and then talked past — which reintroduces exactly the barrier
+   * this whole feature exists to remove.
+   */
+  preferredLanguage?: string | null;
 }
 
 export interface CommandContext {
@@ -161,6 +174,36 @@ interface PendingCommand {
   /** Held while asking which of several recent files was meant. */
   attachment?: ParsedAttachment;
   attachmentOptions?: RecentAttachment[];
+
+  // ─── Outreach ─────────────────────────────────────────────────────────────
+
+  /** The external party, once resolved to a row. Never a `User`. */
+  contactId?: string | null;
+  /** Their display name, for reading the command back before it runs. */
+  contactName?: string | null;
+  /** Their number, masked, so a confirmation shows WHO without leaking it. */
+  contactPhoneMasked?: string | null;
+  /** The bill this concerns, when the sender named a reference we hold. */
+  invoiceId?: string | null;
+  /**
+   * The amount to be quoted, in whole units.
+   *
+   * Resolved at CONFIRMATION time from the invoice where one exists, so the
+   * figure the sender is shown is the figure that gets sent. Carrying the
+   * typed number through and re-resolving at execution would let the message
+   * differ from what was approved.
+   */
+  amount?: number | null;
+  currency?: string | null;
+  /** The reference as it will appear in the message ("Invoice INV-102"). */
+  reference?: string | null;
+  /** Rendered date for the template's fifth parameter. */
+  dateText?: string | null;
+  /** What is being sent, checked or ordered. */
+  itemText?: string | null;
+  quantityText?: string | null;
+  /** True when the party was added in the last day — worth saying out loud. */
+  contactIsNew?: boolean;
 }
 
 type ChoiceOption = Candidate;
@@ -301,6 +344,19 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<CommandOutc
       case 'add_comment':
       case 'set_priority':
       case 'set_deadline':    return await startEdit(ctx, parsed);
+
+      // Delegated outreach — creates a task, contacts nobody outside.
+      case 'assign_sample_dispatch':
+      case 'create_sales_task':
+      case 'create_store_check_task':
+      case 'create_collection_task':  return await startOutreachTask(ctx, parsed);
+
+      // Direct outreach — messages somebody outside. Always confirms.
+      case 'send_payment_reminder':   return await startPaymentReminder(ctx, parsed);
+      case 'send_sample_notice':      return await startSampleNotice(ctx, parsed);
+
+      case 'register_contact':        return await startRegisterContact(ctx, parsed);
+      case 'search_contact':          return await startSearchContact(ctx, parsed);
     }
   } catch (err) {
     console.error('[Command] Unexpected failure:', err);
@@ -617,7 +673,11 @@ function attachmentAsCommand(a: ParsedAttachment): ParsedCommand {
     assignmentIntent: null, replaces: false, adds: false, fromName: null,
     ownerName: null, dueFilter: null,
     title: a.title, deadlineText: null, priority: null, comment: null,
-    reason: null, confidence: 0.9, source: 'rule',
+    reason: null,
+    contactName: null, contactPhone: null, contactType: null,
+    amount: null, currency: null, reference: null,
+    itemDescription: null, quantity: null,
+    confidence: 0.9, source: 'rule',
   };
 }
 
@@ -1196,9 +1256,541 @@ async function askWhichPerson(
   return outcome(reply, CommandStatus.clarifying, pending.taskId);
 }
 
-function describe(pending: PendingCommand): string {
+// ─── Outreach ─────────────────────────────────────────────────────────────────
+//
+// Two shapes, and the difference between them is the whole safety story:
+//
+//   DELEGATED  creates a task for an employee. Low risk, reversible, and the
+//              external party is never contacted — so it executes directly at
+//              high confidence, exactly like `create_task`.
+//
+//   DIRECT     sends a message to somebody outside the company. Not reversible
+//              and not correctable: a wrong amount to the wrong vendor cannot
+//              be unsent. These ALWAYS confirm, whatever the confidence, and
+//              the confirmation reads back the parsed values rather than the
+//              raw message — so a mis-parse is visible before it is sent, not
+//              after.
+
+/** Above this, a confirmation spells the amount out in words as well as digits. */
+function largeAmountThreshold(): number {
+  return Number(process.env.WA_CONFIRM_AMOUNT ?? 100_000);
+}
+
+/** How long a contact counts as newly added, for the extra warning. */
+const NEW_CONTACT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve the party the sender named to a contact row.
+ *
+ * Returns either a resolved contact, or an outcome that has already asked the
+ * sender something. The candidate list comes from `contactCandidates`, which
+ * is scoped to what this sender may message — so a party outside their scope
+ * is not "forbidden", it simply was never a candidate, which is the same
+ * property `assignableUsers` gives the employee side.
+ */
+async function resolveContactNamed(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+  name: string,
+): Promise<
+  | { contact: { id: string; name: string; phone: string; createdAt: Date }; requiresConfirmation: boolean }
+  | { outcome: CommandOutcome }
+> {
+  const candidates = await contactCandidates({ id: ctx.actor.id, role: ctx.actor.role });
+
+  if (candidates.length === 0) {
+    return {
+      outcome: await refuseIn(ctx, parsed, 'noContacts'),
+    };
+  }
+
+  const resolution = resolveName(name, candidates);
+
+  if (resolution.status === 'not_found') {
+    return {
+      outcome: await refuseIn(ctx, parsed, 'contactNotFound', { name }),
+    };
+  }
+
+  if (resolution.status === 'ambiguous') {
+    // De-duplicate by contact id: aliases put the same party in the list more
+    // than once, and offering "1. Ramesh Traders  2. Ramesh Traders" is not a
+    // question anybody can answer.
+    const seen = new Set<string>();
+    const unique = resolution.candidates.filter((c) => {
+      const id = (c.user as { contactId?: string }).contactId ?? c.user.id;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+    if (unique.length === 1) {
+      const only = await loadContact(unique[0].user.id);
+      if (only) return { contact: only, requiresConfirmation: true };
+    }
+
+    return { outcome: await askWhichContact(ctx, parsed, unique.slice(0, 5)) };
+  }
+
+  const contact = await loadContact(resolution.match!.user.id);
+  if (!contact) {
+    return { outcome: await refuseIn(ctx, parsed, 'contactNotFound', { name }) };
+  }
+  return { contact, requiresConfirmation: resolution.requiresConfirmation };
+}
+
+async function loadContact(id: string) {
+  return prisma.contact.findUnique({
+    where:  { id },
+    select: { id: true, name: true, phone: true, createdAt: true },
+  });
+}
+
+/** Ask which of several similarly-named parties was meant. */
+async function askWhichContact(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+  options: Array<{ user: Candidate }>,
+): Promise<CommandOutcome> {
+  const rows = await prisma.contact.findMany({
+    where:  { id: { in: options.map((o) => o.user.id) } },
+    select: { id: true, name: true, companyName: true, address: true },
+  });
+
+  const pending: PendingCommand = {
+    parsed, taskId: null, targetId: null, targetName: null, targets: [],
+    previousAssigneeName: null, fromContext: false, deadlineIso: null,
+  };
+
+  await setState(
+    ctx.actor.id, 'choose_contact', pending,
+    rows.map((r) => ({ id: r.id, name: r.name })),
+  );
+
+  // The distinguishing detail matters more than the name here — two rows both
+  // called "Ramesh Traders" are unanswerable without the city or company.
+  const lines = rows
+    .map((r, i) => {
+      const detail = [r.companyName, r.address].filter(Boolean).join(' — ');
+      return `${i + 1}. ${r.name}${detail ? ` – ${detail}` : ''}`;
+    })
+    .join('\n');
+
+  const reply = `I found ${rows.length} matches:\n${lines}\n\nWhich one do you mean? Reply with the number.`;
+
+  await record(ctx, {
+    intent: parsed.intent, entities: parsed, confidence: parsed.confidence,
+    status: CommandStatus.clarifying, errorReason: reply,
+  });
+  return outcome(reply, CommandStatus.clarifying, null);
+}
+
+/**
+ * Record a refusal and phrase it for somebody who is not a programmer.
+ *
+ * "I couldn't find Sahil in the employee list", never "Foreign key constraint
+ * failed" — and in the sender's own language, since somebody who cannot read
+ * the refusal cannot act on it.
+ */
+async function refuseIn(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+  key: Parameters<typeof t>[1],
+  vars: Record<string, string | number> = {},
+): Promise<CommandOutcome> {
+  return refuse(ctx, parsed, t(langOf(ctx.actor.preferredLanguage), key, vars));
+}
+
+async function refuse(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+  reply: string,
+): Promise<CommandOutcome> {
+  await record(ctx, {
+    intent: parsed.intent, entities: parsed, confidence: parsed.confidence,
+    status: CommandStatus.rejected, errorReason: reply,
+  });
+  return outcome(reply, CommandStatus.rejected, null);
+}
+
+/** What each delegated intent becomes on the task record. */
+const OUTREACH_TASK_KIND: Record<string, TaskKind> = {
+  assign_sample_dispatch:  TaskKind.sample_dispatch,
+  create_sales_task:       TaskKind.sales,
+  create_store_check_task: TaskKind.stock_check,
+  create_collection_task:  TaskKind.payment_followup,
+};
+
+/**
+ * "Ask Sahil to send samples to Urja Vart" — a task for an employee, about an
+ * outside party who is NOT messaged.
+ *
+ * Deliberately as permissive as `create_task`: the brief is explicit that a
+ * low-risk internal action should execute and confirm rather than interrogate.
+ * The one thing that cannot be defaulted is the deadline, because
+ * `taskService.create` requires a real one and inventing a date somebody will
+ * be escalated against is worse than asking.
+ */
+async function startOutreachTask(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+): Promise<CommandOutcome> {
+  const assignable = await assignableUsers({ id: ctx.actor.id, role: ctx.actor.role });
+  if (assignable.length === 0) {
+    return refuse(ctx, parsed, 'You do not have anybody to assign work to.');
+  }
+
+  if (!parsed.targetName) {
+    return refuseIn(ctx, parsed, 'askWho');
+  }
+
+  const base: PendingCommand = {
+    parsed, taskId: null, targetId: null, targetName: null, targets: [],
+    previousAssigneeName: null, fromContext: false, deadlineIso: null,
+  };
+  const resolved = await resolveEveryName(ctx, parsed.targetNames, assignable, base, null);
+  if ('outcome' in resolved) return resolved.outcome;
+  const { targets, requiresConfirmation } = resolved;
+
+  // The external party is optional — a store check often concerns nobody
+  // outside the company at all — but a NAMED party that cannot be found is an
+  // error, not something to quietly drop.
+  let contactId: string | null = null;
+  let contactName: string | null = null;
+  let contactIsNew = false;
+
+  if (parsed.contactName) {
+    const found = await resolveContactNamed(ctx, parsed, parsed.contactName);
+    if ('outcome' in found) return found.outcome;
+    contactId    = found.contact.id;
+    contactName  = found.contact.name;
+    contactIsNew = Date.now() - found.contact.createdAt.getTime() < NEW_CONTACT_MS;
+  }
+
+  const deadline = parsed.deadlineText ? parseDeadline(parsed.deadlineText) : null;
+  if (parsed.deadlineText && !deadline) {
+    return refuseIn(ctx, parsed, 'askDate', { text: parsed.deadlineText });
+  }
+
+  const pending: PendingCommand = {
+    parsed,
+    taskId: null,
+    targetId: targets[0]?.id ?? null,
+    targetName: targets[0]?.name ?? null,
+    targets,
+    previousAssigneeName: null,
+    fromContext: false,
+    deadlineIso: (deadline ?? defaultOutreachDeadline()).toISOString(),
+    contactId,
+    contactName,
+    contactIsNew,
+    itemText:     parsed.itemDescription,
+    quantityText: parsed.quantity,
+    reference:    parsed.reference,
+    amount:       parsed.amount,
+    currency:     parsed.currency,
+  };
+
+  // Creating internal work is reversible and touches nobody outside, so the
+  // ordinary confidence gate applies. No extra friction is added here.
+  const certain = parsed.confidence >= confidenceThreshold() && !requiresConfirmation;
+  return certain ? execute(ctx, pending, false) : askToConfirm(ctx, pending);
+}
+
+/**
+ * When the sender did not say when.
+ *
+ * `taskService.create` requires a real deadline and will not invent one. Rather
+ * than interrogate an Admin who just wants a task raised — which the brief
+ * explicitly asks us not to do for optional information — an outreach task
+ * defaults to the end of the next working day, and the confirmation says so.
+ */
+function defaultOutreachDeadline(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(18, 0, 0, 0);
+  return d;
+}
+
+/**
+ * "Send a payment reminder of ₹45,000 to Ramesh Traders" — a message to
+ * somebody outside the company, about money.
+ *
+ * Always confirms. The `WA_CONFIDENCE_THRESHOLD` gate that lets a reassignment
+ * through was tuned for an action that is undoable and internal; this one is
+ * neither, and a confident mis-parse is exactly the case that gate cannot
+ * catch.
+ */
+async function startPaymentReminder(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+): Promise<CommandOutcome> {
+  if (!parsed.contactName) {
+    return refuseIn(ctx, parsed, 'askWhoToRemind');
+  }
+
+  const found = await resolveContactNamed(ctx, parsed, parsed.contactName);
+  if ('outcome' in found) return found.outcome;
+  const contact = found.contact;
+
+  const actor = { id: ctx.actor.id, role: ctx.actor.role };
+
+  // The invoice is the source of truth when we hold one. A figure typed on a
+  // phone cannot be checked against anything, and this message asks a real
+  // business for real money.
+  const invoice = parsed.reference ? await invoiceService.findByRef(actor, parsed.reference) : null;
+
+  if (parsed.reference && !invoice) {
+    // Not an error — the client may genuinely not have recorded it. But the
+    // sender is told, so they know the amount is the one they typed.
+    if (parsed.amount === null) {
+      return refuseIn(ctx, parsed, 'invoiceUnknownNoAmount', { ref: parsed.reference });
+    }
+  }
+
+  const amount   = invoice ? Number(invoice.balance) : parsed.amount;
+  const currency = invoice ? invoice.currency : (parsed.currency ?? 'INR');
+
+  if (amount === null || amount === undefined) {
+    return refuseIn(ctx, parsed, 'askAmount', { name: contact.name });
+  }
+
+  const dueDate   = invoice?.dueDate ?? (parsed.deadlineText ? parseDeadline(parsed.deadlineText) : null) ?? new Date();
+  const reference = invoice ? `Invoice ${invoice.number}` : (parsed.reference ? `Invoice ${parsed.reference}` : 'your account');
+
+  const pending: PendingCommand = {
+    parsed,
+    taskId: null, targetId: null, targetName: null, targets: [],
+    previousAssigneeName: null, fromContext: false, deadlineIso: dueDate.toISOString(),
+    contactId:          contact.id,
+    contactName:        contact.name,
+    contactPhoneMasked: maskPhone(contact.phone),
+    contactIsNew:       Date.now() - contact.createdAt.getTime() < NEW_CONTACT_MS,
+    invoiceId:          invoice?.id ?? null,
+    amount,
+    currency,
+    reference,
+    dateText:           fmtDate(dueDate),
+  };
+
+  return askToConfirm(ctx, pending);
+}
+
+/** "Send the sample dispatch message to Rakesh" — a notice, direct to the party. */
+async function startSampleNotice(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+): Promise<CommandOutcome> {
+  if (!parsed.contactName) {
+    return refuseIn(ctx, parsed, 'askWhoToNotify');
+  }
+
+  const found = await resolveContactNamed(ctx, parsed, parsed.contactName);
+  if ('outcome' in found) return found.outcome;
+  const contact = found.contact;
+
+  const arrival = (parsed.deadlineText ? parseDeadline(parsed.deadlineText) : null) ?? defaultOutreachDeadline();
+
+  const pending: PendingCommand = {
+    parsed,
+    taskId: null, targetId: null, targetName: null, targets: [],
+    previousAssigneeName: null, fromContext: false, deadlineIso: arrival.toISOString(),
+    contactId:          contact.id,
+    contactName:        contact.name,
+    contactPhoneMasked: maskPhone(contact.phone),
+    contactIsNew:       Date.now() - contact.createdAt.getTime() < NEW_CONTACT_MS,
+    itemText:           parsed.itemDescription ?? parsed.quantity ?? 'samples',
+    reference:          parsed.reference ?? '—',
+    dateText:           fmtDate(arrival),
+  };
+
+  return askToConfirm(ctx, pending);
+}
+
+/**
+ * "register vendor Metro Logistics 9876543210".
+ *
+ * Always confirms, whatever the confidence. A typo here does not fail loudly —
+ * it silently creates a party that does not exist and points every future
+ * message at a stranger's phone.
+ */
+async function startRegisterContact(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+): Promise<CommandOutcome> {
+  if (!parsed.contactName) {
+    return refuseIn(ctx, parsed, 'askRegisterName');
+  }
+  if (!parsed.contactPhone) {
+    return refuseIn(ctx, parsed, 'askRegisterPhone', { name: parsed.contactName });
+  }
+
+  const pending: PendingCommand = {
+    parsed,
+    taskId: null, targetId: null, targetName: null, targets: [],
+    previousAssigneeName: null, fromContext: false, deadlineIso: null,
+    contactName:        parsed.contactName,
+    contactPhoneMasked: maskPhone(parsed.contactPhone),
+  };
+
+  return askToConfirm(ctx, pending);
+}
+
+/** "find Metro Logistics" — read-only, so it answers immediately. */
+async function startSearchContact(
+  ctx: CommandContext,
+  parsed: ParsedCommand,
+): Promise<CommandOutcome> {
+  const query = parsed.contactName;
+  if (!query) return refuseIn(ctx, parsed, 'askWhoToRemind');
+
+  const candidates = await contactCandidates({ id: ctx.actor.id, role: ctx.actor.role });
+  const resolution = resolveName(query, candidates);
+
+  if (resolution.status === 'not_found') {
+    const reply = `I couldn't find "${query}" in the system. Reply: register vendor ${query} <phone number> to add them.`;
+    await record(ctx, {
+      intent: parsed.intent, entities: parsed, confidence: parsed.confidence,
+      status: CommandStatus.executed, errorReason: null,
+    });
+    return outcome(reply, CommandStatus.executed, null);
+  }
+
+  const ids = resolution.status === 'matched'
+    ? [resolution.match!.user.id]
+    : [...new Set(resolution.candidates.map((c) => c.user.id))].slice(0, 5);
+
+  const rows = await prisma.contact.findMany({
+    where:  { id: { in: ids } },
+    select: { name: true, companyName: true, type: true, phone: true, optOutAt: true },
+  });
+
+  const lines = rows.map((r) => {
+    const bits = [r.companyName, r.type, maskPhone(r.phone)].filter(Boolean).join(' · ');
+    return `• ${r.name}${bits ? ` — ${bits}` : ''}${r.optOutAt ? ' (opted out)' : ''}`;
+  }).join('\n');
+
+  await record(ctx, {
+    intent: parsed.intent, entities: parsed, confidence: parsed.confidence,
+    status: CommandStatus.executed,
+  });
+  return outcome(`Found:\n${lines}`, CommandStatus.executed, null);
+}
+
+/**
+ * Show enough of a number to identify it, not enough to misuse it.
+ *
+ * The confirmation has to prove we are about to message the RIGHT party, and
+ * the last four digits do that — while a full number echoed into a WhatsApp
+ * thread is a copy of somebody's contact details sitting in a chat log.
+ */
+function maskPhone(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 4 ? `+${digits.slice(0, 2)} ••••${digits.slice(-4)}` : null;
+}
+
+/**
+ * An amount spelled out, for a confirmation the sender must not skim.
+ *
+ * Indian units, because "one lakh twenty thousand" is how the number is read
+ * aloud here and "120 thousand" is not.
+ */
+function amountInWords(value: number): string {
+  if (value >= 10_000_000) return `${trimZeros(value / 10_000_000)} crore`;
+  if (value >= 100_000)    return `${trimZeros(value / 100_000)} lakh`;
+  if (value >= 1_000)      return `${trimZeros(value / 1_000)} thousand`;
+  return String(value);
+}
+
+function trimZeros(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
+/**
+ * The task title an outreach instruction produces.
+ *
+ * Written to read like something a person would have typed on the dashboard,
+ * because it appears in the tracker beside tasks that were. The full original
+ * message is kept in the description, so nothing the sender said is lost even
+ * where the title summarises.
+ */
+function outreachTitle(pending: PendingCommand): string {
+  const party = pending.contactName;
+  const item  = pending.itemText;
+  const qty   = pending.quantityText;
+  const thing = [qty, item].filter(Boolean).join(' ') || null;
+
+  switch (pending.parsed.intent) {
+    case 'assign_sample_dispatch':
+      return `Send ${thing ?? 'samples'}${party ? ` to ${party}` : ''}`;
+    case 'create_sales_task':
+      return `Create a sale${party ? ` for ${party}` : ''}${thing ? ` — ${thing}` : ''}`;
+    case 'create_store_check_task':
+      return `Check stock${thing ? ` of ${thing}` : ''}${party ? ` with ${party}` : ''}`;
+    case 'create_collection_task':
+      return `Follow up payment${party ? ` from ${party}` : ''}`
+        + `${pending.amount ? ` — ${outreachService.money(pending.amount, pending.currency ?? 'INR')}` : ''}`;
+    default:
+      return pending.parsed.title ?? 'Task';
+  }
+}
+
+/**
+ * The structured detail, on the existing `customFields` Json column.
+ *
+ * Deliberately not new columns: these differ per use case and would otherwise
+ * mean a migration each time the client names another thing they want captured.
+ * Empty values are dropped so the task detail panel does not show a column of
+ * blank rows.
+ */
+function outreachCustomFields(pending: PendingCommand): Record<string, string> {
+  const fields: Record<string, string> = {};
+  if (pending.contactName)  fields.Party     = pending.contactName;
+  if (pending.itemText)     fields.Item      = pending.itemText;
+  if (pending.quantityText) fields.Quantity  = pending.quantityText;
+  if (pending.reference)    fields.Reference = pending.reference;
+  if (pending.amount != null) {
+    fields.Amount = outreachService.money(pending.amount, pending.currency ?? 'INR');
+  }
+  return fields;
+}
+
+/**
+ * Does this bill mean we owe them?
+ *
+ * Read from the stored invoice, never inferred from how the instruction was
+ * worded. "Remind Metro about INV-2231" is the same sentence whether Metro is
+ * a supplier we owe or a customer who owes us, and the two templates say
+ * opposite things to the recipient.
+ *
+ * With no invoice on record the safe default is the collection wording, which
+ * is what an Admin typing "send a payment reminder" almost always means — and
+ * the confirmation showed them the wording's subject before it went.
+ */
+async function isPayable(invoiceId: string | null | undefined): Promise<boolean> {
+  if (!invoiceId) return false;
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId }, select: { payable: true },
+  });
+  return invoice?.payable === true;
+}
+
+/**
+ * The phrase a confirmation reads back.
+ *
+ * The outreach intents render through `replies.action`, so a Hindi sender is
+ * asked to confirm in Hindi. The pre-existing intents stay in English: they
+ * were English before this change, and translating half a sentence — an
+ * English verb glued to a Hindi clause — reads worse than either language on
+ * its own. They are listed in `ACTIONS` when somebody wants them translated.
+ */
+function describe(pending: PendingCommand, lang: Lang = 'en'): string {
   const p = pending.parsed;
   const due = pending.deadlineIso ? fmtDate(new Date(pending.deadlineIso)) : null;
+
+  const outreachAction = describeOutreach(pending, lang, due);
+  if (outreachAction) return outreachAction;
 
   switch (p.intent) {
     case 'reassign_ticket':
@@ -1217,7 +1809,90 @@ function describe(pending: PendingCommand): string {
       return `reassign ${pending.bulkTaskIds?.length ?? 0} task(s) to ${pending.targetName}`;
     case 'undo_last':
       return `undo that`;
+
+    // Handled above by `describeOutreach`, which renders them in the sender's
+    // language. Listed here so the switch stays exhaustive and adding an
+    // intent is still a compile error.
+    case 'assign_sample_dispatch':
+    case 'create_sales_task':
+    case 'create_store_check_task':
+    case 'create_collection_task':
+    case 'send_payment_reminder':
+    case 'send_sample_notice':
+    case 'register_contact':
+    case 'search_contact':
+      return describeOutreach(pending, lang, due) ?? `look up ${pending.contactName}`;
   }
+}
+
+/**
+ * Render an outreach confirmation in the sender's language, or null when this
+ * is not an outreach intent.
+ *
+ * Every optional fragment is passed as an already-assembled string rather than
+ * a flag, because the two languages put them in different places — Hindi's
+ * postposition follows the noun where English's preposition precedes it, and a
+ * template that has to branch on that is not a template.
+ */
+function describeOutreach(pending: PendingCommand, lang: Lang, due: string | null): string | null {
+  const p = pending.parsed;
+
+  const key: ActionKey | null =
+      p.intent === 'assign_sample_dispatch'  ? 'createSampleTask'
+    : p.intent === 'create_sales_task'       ? 'createSalesTask'
+    : p.intent === 'create_store_check_task' ? 'createStockTask'
+    : p.intent === 'create_collection_task'  ? 'createCollectionTask'
+    : p.intent === 'send_payment_reminder'   ? 'sendPaymentReminder'
+    : p.intent === 'send_sample_notice'      ? 'sendSampleNotice'
+    : p.intent === 'register_contact'        ? 'registerContact'
+    : null;
+  if (!key) return null;
+
+  const amount = pending.amount != null
+    ? outreachService.money(pending.amount, pending.currency ?? 'INR')
+    : '';
+
+  // Spelled out in words above the threshold, so a confirmation about a large
+  // sum cannot be skimmed past on a phone screen.
+  const words = pending.amount != null && pending.amount >= largeAmountThreshold()
+    ? ` (${amountInWords(pending.amount)})`
+    : '';
+
+  // A party added minutes ago is the case a typo produces, so it is called out
+  // rather than left to be noticed after the message has gone.
+  const isNew = pending.contactIsNew
+    ? (lang === 'hi'
+        ? '\n⚠️ यह पार्टी पिछले 24 घंटों में जोड़ी गई है।'
+        : '\n⚠️ This contact was added in the last 24 hours.')
+    : '';
+
+  // The preposition differs per intent: work is sent TO a party, dues are
+  // collected FROM one. Hindi marks the second with "से", not "को".
+  const contactPrep =
+      p.intent === 'create_collection_task' ? { en: 'from', hi: 'से' as const }
+    : p.intent === 'create_store_check_task' ? { en: 'with', hi: 'से' as const }
+    : p.intent === 'create_sales_task'       ? { en: 'for',  hi: 'को' as const }
+    :                                          { en: 'to',   hi: 'को' as const };
+
+  const itemText = [pending.quantityText, pending.itemText].filter(Boolean).join(' ');
+
+  const rendered = phrase(lang, key, {
+    contact:   fragment(lang, pending.contactName, contactPrep.en, contactPrep.hi),
+    name:      pending.contactName ?? '',
+    phone:     pending.contactPhoneMasked ? ` (${pending.contactPhoneMasked})` : '',
+    amount,
+    words,
+    amountSuffix: amount ? ` — ${amount}` : '',
+    reference: pending.reference ?? '',
+    date:      pending.dateText ?? due ?? '',
+    item:      key === 'createStockTask'
+                 ? fragment(lang, itemText || null, 'of', 'का')
+                 : (itemText || (lang === 'hi' ? 'सैंपल' : 'samples')),
+    assignee:  pending.targetName ?? '',
+    type:      p.contactType ?? 'contact',
+  });
+
+  return rendered + isNew;
 }
 
 async function askToConfirm(ctx: CommandContext, pending: PendingCommand): Promise<CommandOutcome> {
@@ -1226,11 +1901,12 @@ async function askToConfirm(ctx: CommandContext, pending: PendingCommand): Promi
   // On a voice note, show what was transcribed. The sender can hear their own
   // words back in WhatsApp but has no idea what we made of them, and a bad
   // transcript is the likeliest reason we're asking in the first place.
-  const heard = ctx.transcription ? `I heard: "${ctx.transcription.slice(0, 120)}"\n\n` : '';
+  const heard = ctx.transcription
+    ? `${t(langOf(ctx.actor.preferredLanguage), 'confirmHeard', { text: ctx.transcription.slice(0, 120) })}\n\n`
+    : '';
 
-  const reply =
-    `${heard}You are about to ${describe(pending)}. ` +
-    `Reply "Confirm" to continue, or "Cancel" to stop.`;
+  const lang = langOf(ctx.actor.preferredLanguage);
+  const reply = `${heard}${t(lang, 'confirmPrompt', { action: describe(pending, lang) })}`;
 
   await record(ctx, {
     intent: pending.parsed.intent, entities: pending.parsed,
@@ -1258,6 +1934,7 @@ async function execute(
   const actor  = { id: ctx.actor.id, role: ctx.actor.role };
   const parsed = pending.parsed;
   const opts   = { channel: ActionChannel.whatsapp };
+  const lang   = langOf(ctx.actor.preferredLanguage);
 
   const before = pending.taskId
     ? await prisma.task.findUnique({ where: { id: pending.taskId }, select: { assignedToId: true } })
@@ -1429,6 +2106,111 @@ async function execute(
       case 'set_deadline': {
         const task = await taskService.setDeadline(actor, pending.taskId!, new Date(pending.deadlineIso!), opts);
         reply = `✅ ${task.id} deadline moved to ${fmtDate(task.deadline)}.`;
+        break;
+      }
+
+      // ─── Delegated outreach ─────────────────────────────────────────────
+      //
+      // One branch for all four. They differ only in the `kind` recorded and
+      // the words used, so `taskService.create` is called once — which is also
+      // what keeps permissions, notifications and the activity log identical
+      // to a task raised on the website.
+      case 'assign_sample_dispatch':
+      case 'create_sales_task':
+      case 'create_store_check_task':
+      case 'create_collection_task': {
+        const kind = OUTREACH_TASK_KIND[parsed.intent];
+
+        const created = await taskService.create(actor, {
+          title:       outreachTitle(pending),
+          description: ctx.text.slice(0, 2000),
+          assignedToId: pending.targetId!,
+          deadline:     new Date(pending.deadlineIso!),
+          customFields: outreachCustomFields(pending),
+        }, opts);
+
+        // `kind`, `contactId` and `invoiceId` are set immediately after rather
+        // than passed through `CreateInput`: keeping them out of that shared
+        // signature means the web create path and its callers are untouched by
+        // this feature.
+        await prisma.task.update({
+          where: { id: created.id },
+          data:  { kind, contactId: pending.contactId ?? null, invoiceId: pending.invoiceId ?? null },
+        });
+
+        taskId = created.id;
+        reply  = t(lang, 'taskCreated', {
+          taskId:   created.id,
+          assignee: created.assignedTo.name,
+          title:    created.title,
+          due:      fmtDate(created.deadline),
+        });
+        break;
+      }
+
+      // ─── Direct outreach ────────────────────────────────────────────────
+      //
+      // Reached only after an explicit confirmation — `startPaymentReminder`
+      // and `startSampleNotice` have no path that calls `execute` directly.
+      case 'send_payment_reminder': {
+        const result = await outreachService.sendOutreach(
+          { id: ctx.actor.id, role: ctx.actor.role, name: ctx.actor.name },
+          {
+            contactId: pending.contactId!,
+            // A vendor bill means WE owe THEM, and the two templates say
+            // opposite things. Deciding it from the stored invoice rather than
+            // from the wording is what stops "remind Metro about INV-2231"
+            // telling a supplier they owe us money they are in fact owed.
+            kind:      (await isPayable(pending.invoiceId))
+                         ? 'payment_advice_vendor'
+                         : 'payment_due_reminder',
+            headline:  outreachService.money(pending.amount ?? 0, pending.currency ?? 'INR'),
+            detail:    pending.reference ?? 'your account',
+            date:      pending.dateText ?? fmtDate(new Date(pending.deadlineIso!)),
+          },
+        );
+
+        reply = result.ok
+          ? t(lang, 'reminderSent', {
+              name:   pending.contactName ?? '',
+              amount: outreachService.money(pending.amount ?? 0, pending.currency ?? 'INR'),
+            })
+          : t(lang, 'sendFailed', { name: pending.contactName ?? '', reason: result.error ?? '' });
+        break;
+      }
+
+      case 'send_sample_notice': {
+        const result = await outreachService.sendOutreach(
+          { id: ctx.actor.id, role: ctx.actor.role, name: ctx.actor.name },
+          {
+            contactId: pending.contactId!,
+            kind:      'sample_dispatch',
+            headline:  pending.itemText ?? 'samples',
+            detail:    pending.reference ?? '—',
+            date:      pending.dateText ?? fmtDate(new Date(pending.deadlineIso!)),
+          },
+        );
+
+        reply = result.ok
+          ? t(lang, 'noticeSent', { name: pending.contactName ?? '' })
+          : t(lang, 'sendFailed', { name: pending.contactName ?? '', reason: result.error ?? '' });
+        break;
+      }
+
+      case 'register_contact': {
+        const contact = await createContact(actor, {
+          name:  pending.contactName!,
+          phone: parsed.contactPhone!,
+          type:  (parsed.contactType as never) ?? undefined,
+        });
+        reply = t(lang, 'contactSaved', { name: contact.name, type: contact.type });
+        break;
+      }
+
+      // Read-only, and answered in `startSearchContact` before `execute` is
+      // ever reached. Listed so the switch stays exhaustive.
+      case 'search_contact': {
+        reply = 'Nothing to do.';
         break;
       }
     }
@@ -1628,6 +2410,54 @@ async function resolvePending(
       // Replace only the name that WAS ambiguous, keeping any already resolved.
       targets: [...pending.targets.filter((t) => t.id !== picked.id), picked],
     });
+  }
+
+  // ── Which external party did they mean? ─────────────────────────────────
+  //
+  // The same shape as `choose_employee`, and separate for the same reason the
+  // slots are separate: a contact is not a `User`, and resolving one must not
+  // put a contact id where an assignee id is read.
+  //
+  // Crucially, the ORIGINAL command is resumed. The sender said "send a
+  // payment reminder to Ramesh", we asked which Ramesh, they said "2" — and
+  // what runs is the payment reminder, not a bare selection.
+  if (state.kind === 'choose_contact') {
+    const options = state.options as ChoiceOption[];
+
+    const byIndex = readChoiceIndex(ctx.text, options.length);
+    const picked = byIndex !== null
+      ? options[byIndex]
+      : resolveName(ctx.text, options).match?.user ?? null;
+
+    if (!picked) {
+      // A brand new command replaces the question rather than being read as a
+      // bad answer to it — the newest thing the sender said is what they mean.
+      if (await parseCommand(ctx.text)) return null;
+      return outcome(
+        `I still need to know which one:\n${options.map((o, i) => `${i + 1}. ${o.name}`).join('\n')}`,
+        CommandStatus.clarifying,
+        pending.taskId,
+      );
+    }
+
+    // Re-enter the original handler with the party now pinned by id. Restarting
+    // rather than patching the pending state is what keeps the invoice lookup,
+    // the opt-out check and the amount resolution in one place instead of
+    // duplicated here — and those are the steps that must not be skipped.
+    const resumed: ParsedCommand = { ...pending.parsed, contactName: picked.name };
+
+    switch (resumed.intent) {
+      case 'send_payment_reminder':      return startPaymentReminder(ctx, resumed);
+      case 'send_sample_notice':         return startSampleNotice(ctx, resumed);
+      case 'assign_sample_dispatch':
+      case 'create_sales_task':
+      case 'create_store_check_task':
+      case 'create_collection_task':     return startOutreachTask(ctx, resumed);
+      case 'search_contact':             return startSearchContact(ctx, resumed);
+      default:
+        return outcome('Sorry, that request has expired. Please send it again.',
+          CommandStatus.cancelled, null);
+    }
   }
 
   return null;

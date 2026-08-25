@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { MODEL, NVIDIA_URL, extractTaskRef, parseLooseJson } from './intentService';
+import { transliterate } from '../lib/devanagari';
+import { extractAmount, extractDocRef } from './moneyParser';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Turning a manager's WhatsApp message into a structured command.
@@ -30,7 +32,42 @@ export type CommandIntent =
   | 'set_deadline'
   | 'duplicate_task'
   | 'bulk_reassign'
-  | 'undo_last';
+  | 'undo_last'
+  // ─── Outreach ───────────────────────────────────────────────────────────
+  // The four below all CREATE A TASK for an employee, about an external
+  // party. They are separate intents because they carry different slots and
+  // fill different custom fields, not because they execute differently — a
+  // single handler serves all four.
+  | 'assign_sample_dispatch'
+  | 'create_sales_task'
+  | 'create_store_check_task'
+  | 'create_collection_task'
+  // The two below MESSAGE the external party directly.
+  | 'send_payment_reminder'
+  | 'send_sample_notice'
+  // Managing the contact directory itself.
+  | 'register_contact'
+  | 'search_contact';
+
+/**
+ * The outreach intents that create a task rather than messaging an outsider.
+ *
+ * Kept as a set because three different places need the distinction — the
+ * confirmation policy, the executor's dispatch, and the role gate — and each
+ * deriving it from its own list of intent names is how they drift.
+ */
+export const TASK_OUTREACH_INTENTS: ReadonlySet<CommandIntent> = new Set([
+  'assign_sample_dispatch',
+  'create_sales_task',
+  'create_store_check_task',
+  'create_collection_task',
+]);
+
+/** The intents that send a message to somebody outside the company. */
+export const EXTERNAL_OUTREACH_INTENTS: ReadonlySet<CommandIntent> = new Set([
+  'send_payment_reminder',
+  'send_sample_notice',
+]);
 
 /**
  * Whether several names mean one task or one each.
@@ -89,6 +126,30 @@ export interface ParsedCommand {
   comment: string | null;
   /** "because I have a high workload" — recorded on the audit trail. */
   reason: string | null;
+  // ─── Outreach slots ───────────────────────────────────────────────────────
+  //
+  // Kept separate from `targetName`, which means EMPLOYEE everywhere else in
+  // this file and in every consumer of it. "Ask Sahil to send samples to Urja
+  // Vart" names two people who are not the same kind of thing, and collapsing
+  // them into one slot would make that sentence unresolvable.
+
+  /** The external party, as the sender wrote them ("Urja Vart", "रमेश ट्रेडर्स"). */
+  contactName: string | null;
+  /** A phone number typed inline, for registering a contact. */
+  contactPhone: string | null;
+  /** What kind of party, when the sender said ("vendor Ramesh", "customer DGH"). */
+  contactType: string | null;
+  /** Amount in whole currency units. `null` when none was stated. */
+  amount: number | null;
+  /** ISO currency code for `amount`. */
+  currency: string | null;
+  /** An invoice, order or docket reference ("INV-102", "SO-1187"). */
+  reference: string | null;
+  /** What is being sent, checked or ordered ("2m samples of Fabric A12"). */
+  itemDescription: string | null;
+  /** How much of it ("400 sq ft", "2 metre"). */
+  quantity: string | null;
+
   /** 0–1. Drives whether we act straight away or confirm first. */
   confidence: number;
   source: 'rule' | 'ai';
@@ -132,7 +193,9 @@ const DUPLICATE_VERB = /\b(?:duplicate|copy|clone)\b|\b(?:create|make)\s+(?:anot
  * the sender hasn't individually looked at, so it is never inferred from a
  * plural alone.
  */
-const BULK_QUANTIFIER = /\b(?:all|every|saare|sare|सारे|सभी)\b[^.!?]{0,40}?\b(?:tasks?|tickets?|work|kaam)\b|\b(?:tasks?|tickets?)\b[^.!?]{0,20}?\ball\b/i;
+// "kam" as well as "kaam": transliterating काम drops the long vowel, so the
+// Devanagari form arrives here with one 'a', not two.
+const BULK_QUANTIFIER = /\b(?:all|every|saare|sare|सारे|सभी)\b[^.!?]{0,40}?\b(?:tasks?|tickets?|work|kaam|kam)\b|\b(?:tasks?|tickets?)\b[^.!?]{0,20}?\ball\b/i;
 
 /**
  * "move" is excluded from REASSIGN_VERB because it reads as a deadline command
@@ -146,7 +209,7 @@ const BULK_MOVE_VERB = /\b(?:move|shift|transfer|reassign|assign|give|hand\s*ove
 const BULK_PLURAL = /\b(?:tasks|tickets)\b/i;
 
 /** "undo", "undo the last assignment", "revert that", "wapas karo". */
-const UNDO_VERB = /\b(?:undo|revert|rollback|roll\s+back|cancel\s+(?:the\s+)?last|wapas\s+(?:karo|kar\s+do)|वापस)\b/i;
+const UNDO_VERB = /\b(?:undo|revert|rollback|roll\s+back|cancel\s+(?:the\s+)?last|[vw]apas\s+(?:karo|kar\s+do|kar\s+do)|वापस)\b/i;
 
 /** "…tasks due tomorrow", "…due on Friday" — the filter in UC9. */
 const DUE_FILTER = /\bdue\s+(?:on\s+)?(today|tomorrow|[a-z]{3,9}day|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i;
@@ -162,6 +225,51 @@ const OWNER_POSSESSIVE = /\b([A-Za-z][A-Za-z'’\-]*(?:\s+[A-Za-z][A-Za-z'’\-]
 const OWNER_STATE = /\b([A-Za-z][A-Za-z'’\-]{2,20})\s+(?:is|was|will\s+be|has|ke|ka)\b/i;
 
 const COMMENT_VERB = /\b(add\s+(?:a\s+)?(?:comment|note|remark)|comment|note\s+(?:on|that)|remark)\b/i;
+
+// ─── Hindi and Hinglish verb banks ────────────────────────────────────────────
+//
+// These sit alongside the English banks rather than inside them, because Hindi
+// puts the verb last and the noun first — "task banao", not "create a task" —
+// so the proximity rules the English patterns rely on do not transfer.
+//
+// They are written in Roman script only. Devanagari input reaches them through
+// the transliteration pass in `parseWithRules`, which turns "टास्क बनाओ" into
+// "task banao" before any of this runs. Writing them twice, once per script,
+// would double the surface area and guarantee the two copies drift.
+
+/** "task banao", "naya task bana do", "kaam banwao". */
+const CREATE_VERB_HI =
+  /\b(?:task|ticket|kaam|kam)\s+(?:bana(?:o|do|iye|na|dijiye)?|banwa(?:o|do)?|khol(?:o|do))\b|\b(?:naya|nayi|nai)\s+(?:task|ticket|kaam|kam)\b/i;
+
+/** "task 4 par tippani likho", "note likh do". */
+const COMMENT_VERB_HI =
+  /\b(?:tippani|comment|note|remark)\s*(?:likh(?:o|\s*do|iye)?|jod(?:o|\s*do)|add\s*kar(?:o|\s*do)?)\b|\blikh\s*(?:do|dijiye)\b/i;
+
+/**
+ * "priority zaruri kar do", "prathamikata jyada karo", "priority badal do".
+ *
+ * The gap between the noun and the verb is what the English pattern cannot
+ * do: Hindi puts the new VALUE in between — "priority zaruri kar do" — so
+ * requiring the verb to follow the noun directly matched none of these.
+ */
+const PRIORITY_VERB_HI =
+  /\b(?:priority|prathamik(?:a)?ta)\b[^.!?]{0,25}?\b(?:kar\s*(?:o|do|dijiye)|karo|badal\s*do|badl(?:o|iye)|bana\s*do)\b/i;
+
+/** "deadline badal do", "samay seema badhao", "tarikh aage karo". */
+const DEADLINE_VERB_HI =
+  /\b(?:deadline|samay\s*s(?:ee|i)ma|samay|tar(?:ee|i)kh|date)\s*(?:badl(?:o|\s*do)|badal\s*do|badha(?:o|\s*do)|aage\s*kar(?:o|\s*do)?|bad(?:a|ha)\s*do)\b/i;
+
+/** "copy bana do", "dusra task banao", "nakal". */
+const DUPLICATE_VERB_HI =
+  /\b(?:copy|nakal|pratilipi)\s*(?:bana(?:o|\s*do)?|kar(?:o|\s*do)?)\b|\b(?:dusra|doosra|ek\s+aur)\s+(?:task|ticket|copy)\b/i;
+
+/** Bulk handover verbs — "de do", "saunp do", "shift kar do". */
+const BULK_MOVE_VERB_HI =
+  /\b(?:de\s*do|dedo|de\s*dena|saunp(?:o|\s*do)?|transfer\s*kar(?:o|\s*do)?|shift\s*kar(?:o|\s*do)?|bhej\s*do)\b/i;
+
+/** "kal wale saare task", "aaj ke tasks" — the Hindi form of the due filter. */
+const DUE_FILTER_HI =
+  /\b(aaj|aj|kal|para?s(?:o|oo)?n?|som[av]ar|mangal[av]ar|budh[av]ar|guru[av]ar|shukra?[av]ar|shani[av]ar|ravi[av]ar)\s+(?:wale|wala|wali|ke|ki)\b/i;
 
 const PRIORITY_VERB = /\b(?:set|change|make|mark|update)\b[^.!?]{0,30}?\bpriorit(?:y|ies)\b|\bpriority\b[^.!?]{0,20}?\b(?:to|as|=)\b/i;
 
@@ -188,6 +296,182 @@ const REASON_AFTER = /\b(?:because|since|due\s+to|reason)\b[:\s]\s*(.+)$/i;
 
 /** "reassign task 4 FROM Vedant to Vikranth" — who it is being taken off. */
 const FROM_NAME = /\bfrom\s+([A-Za-z][A-Za-z'’\-]*(?:\s+[A-Za-z][A-Za-z'’\-]*){0,2})/i;
+
+// ─── Outreach ─────────────────────────────────────────────────────────────────
+//
+// Every command above moves work between employees. These involve an OUTSIDE
+// party as well, and that is the whole difficulty: the sentence names two
+// people who are not the same kind of thing.
+//
+//   "Ask Sahil to send fabric samples to Urja Vart"
+//         ^ employee                      ^ external party
+//
+// One slot cannot hold both. `targetName` means "employee" in every other
+// branch of this file and in every consumer of it, so the party goes in
+// `contactName` and the two are extracted by different rules — the employee
+// from the frame that delegates the work, the party from the tail that says
+// who it concerns.
+
+/**
+ * "Ask Sahil to …", "tell Vedant to …", "get Gaurav to …".
+ *
+ * The `to` is required: it is what makes this a delegation rather than a
+ * mention. Without it "ask about Ramesh" would name Ramesh as an employee.
+ */
+const EMPLOYEE_FRAME =
+  /\b(?:ask|tell|get|have|assign|instruct)\s+([A-Za-z][A-Za-z.'’\-]*(?:\s+[A-Za-z][A-Za-z.'’\-]*){0,2}?)\s+(?:to|ko|that|the)\b/i;
+
+/**
+ * "Sahil ko bolo …", "Gaurav se poocho …".
+ *
+ * Hindi puts the person first and the verb last, so the English frame — which
+ * looks for a verb THEN a name — matches none of it. The verb list is narrow
+ * on purpose: "X ko bhejo" means send something TO X, not tell X to send, and
+ * including "bhejo" here would turn every recipient into an assignee.
+ */
+const EMPLOYEE_FRAME_HI =
+  /\b([A-Za-z][A-Za-z.'’\-]*(?:\s+[A-Za-z][A-Za-z.'’\-]*){0,2}?)\s+(?:ko|se)\s+(?:bolo|bol\s*do|bolna|kaho|kah\s*do|keh\s*do|kehna|pooch(?:o|ho)|puch(?:o|ho)|kehdo)\b/i;
+
+/** "…for Sahil to…" — the create-a-task phrasing of the same delegation. */
+const EMPLOYEE_FRAME_TASK =
+  /\b(?:task|ticket|job|kaam|kam)\s+(?:for|to)\s+([A-Za-z][A-Za-z.'’\-]*(?:\s+[A-Za-z][A-Za-z.'’\-]*){0,2}?)\s+(?:to|ko|that|for)\b/i;
+
+/**
+ * Words that end a business name.
+ *
+ * A party name is captured greedily — "Urja Vart Textiles Pvt Ltd" is one name
+ * — so something has to stop it before it swallows the rest of the sentence.
+ * These are the words that can only begin a new clause.
+ */
+const CONTACT_STOP =
+  /^(?:about|regarding|for|from|by|on|at|in|with|and|aur|ke|ka|ki|se|ko|that|which|who|whether|if|is|are|was|were|before|after|due|tomorrow|today|kal|aaj|parso|asap|please|pls|urgently|now|tak|the|a|an|of|kya|hai|ho)$/i;
+
+/**
+ * Verbs that cannot begin a party name.
+ *
+ * "Ask Sahil to send samples to Urja Vart" contains two "to" phrases, and the
+ * first one introduces the VERB, not a person. Without this the party came out
+ * as "send fabric samples to" — a capture that starts at the delegating "to"
+ * and runs until it hits a word cap.
+ */
+const CONTACT_STOP_VERB =
+  /^(?:send|sends|sending|dispatch|despatch|courier|ship|deliver|check|checks|confirm|verify|see|look|find|create|make|place|raise|book|prepare|collect|recover|chase|follow|followup|remind|ask|tell|get|have|assign|do|give|know|bhejo|bhejna|dekho|karo|banao|poocho|puchho|mango|maango|lagao)$/i;
+
+/**
+ * Where a party name could begin: after "to", "for", "from" or "with".
+ *
+ * This matches only the PREPOSITION, not the name. Capturing the name here as
+ * well made the match consume several words, so a later "to Urja Vart" fell
+ * inside the region the first match had already eaten and was never seen — the
+ * party came out as "send fabric samples to". Matching the marker and reading
+ * forward from it separately keeps every candidate position visible.
+ */
+const PARTY_MARKER = /\b(?:to|for|from|with)\s+/gi;
+
+/**
+ * Hindi marks the party with a postposition — the name comes BEFORE it.
+ *
+ *   "Urja Vart ko sample bhej de"   ← the party is to the LEFT of "ko"
+ *   "send samples to Urja Vart"     ← the party is to the RIGHT of "to"
+ *
+ * Reading forward from "ko" gives "sample bhej de", so this needs its own
+ * pass that reads backwards. Matching the marker alone, again, rather than
+ * capturing the name — so two adjacent markers cannot swallow each other.
+ */
+const PARTY_MARKER_HI = /\s+(?:ko|se|ke\s+liye)\b/gi;
+
+/** "remind ABC Traders about…", "ABC Traders ko yaad dilao". */
+const REMIND_PARTY =
+  /\bremind\s+([A-Za-z][A-Za-z0-9.'’&\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9.'’&\-]*){0,3}?)\s+(?:about|regarding|for|to|that)\b/i;
+
+// ─── Outreach subject matter ──────────────────────────────────────────────────
+//
+// What the instruction is ABOUT. Each pairs a noun with the verbs that act on
+// it, because the noun alone is too weak — "the samples arrived" is a worker
+// reporting, not a manager delegating.
+
+const SAMPLE_NOUN = /\bsamples?\b|\bswatch(?:es)?\b|\bsainpal\b|\bnamuna\b/i;
+const SEND_ACTION = /\b(?:send|dispatch|courier|ship|deliver|bhej(?:o|na|wa\s*do|\s*do)?|send\s*out)\b/i;
+
+const SALES_NOUN  = /\b(?:sale|sales|sales\s*order|order|so)\b|\bbikri\b|\bordar\b/i;
+const SALES_ACTION = /\b(?:create|make|place|raise|book|prepare|banao|bana\s*do|lagao|kar\s*do)\b/i;
+
+const STOCK_NOUN  = /\b(?:stock|inventory|store|godown|availab(?:le|ility)|maal)\b/i;
+const STOCK_ACTION = /\b(?:check|confirm|verify|see|look|find\s*out|dekh(?:o|na|\s*lo)?|pata\s*karo|chek\s*karo|poocho|puchho)\b/i;
+
+const DUES_NOUN   = /\b(?:dues?|outstanding|receivable|payment|balance|bakaya|baki|udhaar|udhar|vasooli|vasuli)\b/i;
+const COLLECT_ACTION = /\b(?:collect|recover|chase|follow\s*up|followup|pursue|maango|mango|le\s*lo|vasool)\b/i;
+
+/**
+ * A direct payment chase — the sender is not delegating, they want the party
+ * messaged now. "Send a payment reminder to X", "remind X about INV-102".
+ */
+const PAYMENT_REMINDER_DIRECT =
+  /\b(?:payment|invoice|bill|due|dues|outstanding|bhugtan|bhugatan|bakaya)\s*(?:ka\s*)?(?:reminder|alert|notice|follow\s*up|yaad)\b|\b(?:reminder|alert|yaad\s*dila(?:o|na|iye))\b[^.!?]{0,30}?\b(?:payment|invoice|bill|dues|bakaya|bhugatan)\b|\bremind\b[^.!?]{0,40}?\b(?:invoice|payment|bill|dues|outstanding|inv-?\d)/i;
+
+/** A direct dispatch notice to the party, rather than a task for an employee. */
+const SAMPLE_NOTICE_DIRECT =
+  /\bsend\s+(?:the\s+|a\s+)?(?:sample\s+)?(?:dispatch|despatch)\s*(?:message|notice|update|intimation)\b|\b(?:sample|dispatch)\s+(?:message|notice|intimation)\s+(?:to|ko)\b/i;
+
+/** "register vendor Ramesh 9876543210", "add contact Urja Vart". */
+const REGISTER_CONTACT =
+  /\b(?:register|add|save|create|naya|new)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?(customer|vendor|seller|supplier|buyer|party|contact|client|grahak|vikreta)\b/i;
+
+/** "find Ramesh", "search for Metro Logistics", "do we have ABC Traders". */
+const SEARCH_CONTACT =
+  /\b(?:search|find|look\s*up|lookup|do\s+we\s+have|dhoondh?o|khojo)\b[^.!?]{0,20}?\b(?:customer|vendor|seller|supplier|buyer|party|contact|client)\b/i;
+
+/** "vendor Ramesh", "customer DGH" — the party's kind, when stated. */
+const CONTACT_TYPE_WORD =
+  /\b(customer|vendor|seller|supplier|buyer|client|party|grahak|vikreta)\b/i;
+
+/** Maps the words people use onto the six stored types. */
+const CONTACT_TYPE_CANON: Record<string, string> = {
+  customer: 'customer', client: 'customer', grahak: 'customer', buyer: 'buyer',
+  vendor: 'vendor', vikreta: 'vendor',
+  seller: 'seller', supplier: 'supplier',
+  party: 'other', contact: 'other',
+};
+
+/** A phone number typed inline. Indian mobiles are ten digits, often with +91. */
+const INLINE_PHONE = /(?:\+?91[\s\-]?)?\b(\d{10})\b|\b(\d{12})\b/;
+
+/** "400 sq ft", "2 metre", "3 pieces", "2m" — how much of the thing. */
+const QUANTITY =
+  /\b(\d+(?:\.\d+)?\s*(?:sq\.?\s*(?:ft|feet|m|meters?|metres?)|m(?:tr|eters?|etres?)?|kg|g|gm|grams?|tons?|pcs?|pieces?|units?|nos\.?|boxes|rolls?|yards?|dozen))\b/i;
+
+/**
+ * Trim a captured party name down to the name itself.
+ *
+ * Distinct from `cleanName`, which is tuned for people: it cuts at the first
+ * word not shaped like a personal name, which would reduce "Urja Vart
+ * Textiles" to "Urja" and "Metro Logistics Pvt Ltd" to "Metro". A business
+ * name needs the whole string — the contact directory is keyed on it.
+ */
+export function cleanContactName(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+
+  const words: string[] = [];
+  for (const word of raw.trim().split(/\s+/)) {
+    const bare = word.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9.'’&\-]+$/g, '');
+    if (!bare) break;
+    // Stop words are tested WITHOUT a trailing dot. "Urja Vart tomorrow."
+    // ends the sentence, and `bare` keeps that dot — dots are legitimate
+    // inside a business name ("Pvt. Ltd.") so they are not stripped wholesale.
+    if (CONTACT_STOP.test(bare.replace(/\.+$/, ''))) break;
+    // A verb can only be the first word, and only ever means this capture
+    // began at a delegating preposition rather than a name.
+    if (words.length === 0 && CONTACT_STOP_VERB.test(bare.replace(/\.+$/, ''))) return null;
+    words.push(bare);
+    if (words.length === 4) break;
+  }
+
+  const name = words.join(' ').replace(/[.,]+$/, '').trim();
+  // A single stray letter is never a party. "ji" and "sir" are honorifics that
+  // arrive attached to a name and are not part of it.
+  if (name.length < 2) return null;
+  return name.replace(/\s+(?:ji|sir|madam|bhai|saheb|sahab)$/i, '').trim() || null;
+}
 
 // ─── Interpretation Rule 1: shared task vs one each ───────────────────────────
 //
@@ -280,7 +564,8 @@ export function detectAdds(text: string): boolean {
   return hits(text, ADD_PHRASES);
 }
 
-const PRIORITY_VALUE = /\b(high|urgent|critical|medium|normal|low)\b/i;
+const PRIORITY_VALUE = /\b(high|urgent|critical|medium|normal|low|zaruri|zaroori|jaruri|turant|uchch|jyada|zyada|saamanya|samanya|kam)\b/i;
+
 
 /**
  * Deadline phrase for CREATE, where there is no ticket number to anchor on and
@@ -354,6 +639,14 @@ const PRIORITY_CANON: Record<string, 'Low' | 'Medium' | 'High'> = {
   high: 'High', urgent: 'High', critical: 'High',
   medium: 'Medium', normal: 'Medium',
   low: 'Low',
+
+  // Hindi, folded onto the same three levels. "kam" means low — note it also
+  // means "work" (काम), but PRIORITY_VALUE only consults this map inside a
+  // branch that has already established the message is about priority.
+  zaruri: 'High', zaroori: 'High', jaruri: 'High', turant: 'High',
+  uchch: 'High', jyada: 'High', zyada: 'High',
+  saamanya: 'Medium', samanya: 'Medium',
+  kam: 'Low',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -501,8 +794,35 @@ function blank(intent: CommandIntent, source: 'rule' | 'ai', confidence: number)
     assignmentIntent: null, replaces: false, adds: false, fromName: null,
     ownerName: null, dueFilter: null,
     title: null, deadlineText: null,
-    priority: null, comment: null, reason: null, confidence, source,
+    priority: null, comment: null, reason: null,
+    contactName: null, contactPhone: null, contactType: null,
+    amount: null, currency: null, reference: null,
+    itemDescription: null, quantity: null,
+    confidence, source,
   };
+}
+
+/**
+ * Read a model-supplied amount without trusting its formatting.
+ *
+ * The model is asked for a number and usually gives one, but it also returns
+ * "45,000" and "₹45000" often enough to matter. Anything that does not reduce
+ * to a positive finite number becomes null, so the executor asks rather than
+ * sending a message quoting NaN.
+ */
+function toAmount(raw: unknown): number | null {
+  if (raw == null) return null;
+  const digits = String(raw).replace(/[^\d.]/g, '');
+  if (!digits) return null;
+  const value = parseFloat(digits);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Keep only the digits of a phone number typed inline, or null if implausible. */
+function normaliseTypedPhone(raw: string | null): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length >= 10 ? digits : null;
 }
 
 /** Keep `targetName` and `targetNames` in step — the first name is the primary. */
@@ -523,6 +843,35 @@ function setNames(cmd: ParsedCommand, names: string[]): void {
  * ask about. That grading is what decides between executing and clarifying.
  */
 export function parseWithRules(text: string): ParsedCommand | null {
+  const direct = parseRomanRules(text);
+  // A confident read needs no second opinion, and this is the hot path for the
+  // English and Hinglish messages that make up most traffic.
+  if (direct && direct.confidence >= 0.9) return direct;
+
+  const romanised = transliterate(text ?? '');
+  // `transliterate` returns its argument unchanged when there is no Devanagari,
+  // so the all-Latin case costs one regex test and never parses twice.
+  if (romanised === text) return direct;
+
+  const viaRoman = parseRomanRules(romanised);
+  if (!viaRoman) return direct;
+  if (!direct) return viaRoman;
+  return viaRoman.confidence > direct.confidence ? viaRoman : direct;
+}
+
+/**
+ * The rule engine proper, which only ever sees Roman script.
+ *
+ * Splitting this out is what makes Devanagari work without duplicating forty
+ * regexes. Every structural pattern in this file captures names with
+ * `[A-Za-z]` and delimits words with `\b` — and both are defined against ASCII,
+ * so Devanagari input matched almost nothing: a Hindi-script name could not be
+ * captured at all, and `\b` after a character like `प` never fires because
+ * neither side of the boundary is a word character. Rather than widen forty
+ * patterns and hope none was missed, the text is transliterated once and the
+ * existing rules are run again against the result.
+ */
+function parseRomanRules(text: string): ParsedCommand | null {
   const trimmed = text?.trim();
   if (!trimmed) return null;
 
@@ -535,11 +884,22 @@ export function parseWithRules(text: string): ParsedCommand | null {
     return blank('undo_last', 'rule', 0.9);
   }
 
+  // ── Outreach ─────────────────────────────────────────────────────────────
+  // Before reassign and create. "Assign Sahil the sample dispatch for Urja
+  // Vart" contains "assign", and "create a task for Gaurav to check stock"
+  // contains "create … task"; both would otherwise be claimed by branches that
+  // have nowhere to put the external party and would silently drop it.
+  //
+  // Every pattern here requires an outreach NOUN (sample, payment, stock,
+  // sale), so an ordinary "assign task 4 to Vedant" never reaches this code.
+  const outreach = parseOutreach(trimmed, taskRef);
+  if (outreach) return outreach;
+
   // ── Bulk reassignment ────────────────────────────────────────────────────
   // Before the single-task branch, because "move all of Vedant's tasks to
   // Vikranth" matches both and the bulk reading is the correct one.
-  const dueFilter = trimmed.match(DUE_FILTER)?.[1] ?? null;
-  const looksBulk = BULK_MOVE_VERB.test(trimmed)
+  const dueFilter = trimmed.match(DUE_FILTER)?.[1] ?? trimmed.match(DUE_FILTER_HI)?.[1] ?? null;
+  const looksBulk = (BULK_MOVE_VERB.test(trimmed) || BULK_MOVE_VERB_HI.test(trimmed))
     && (BULK_QUANTIFIER.test(trimmed) || (BULK_PLURAL.test(trimmed) && dueFilter !== null));
 
   if (looksBulk) {
@@ -562,7 +922,7 @@ export function parseWithRules(text: string): ParsedCommand | null {
   }
 
   // ── Duplication ──────────────────────────────────────────────────────────
-  if (DUPLICATE_VERB.test(trimmed) && taskRef) {
+  if ((DUPLICATE_VERB.test(trimmed) || DUPLICATE_VERB_HI.test(trimmed)) && taskRef) {
     const cmd = blank('duplicate_task', 'rule', 0.6);
     cmd.taskRef = taskRef;
     setNames(cmd, extractNames(trimmed, taskRef));
@@ -628,7 +988,7 @@ export function parseWithRules(text: string): ParsedCommand | null {
   // naming a ticket is talking about that ticket; only one with no reference at
   // all is asking for a new one. Ordering it the other way round meant "Add a
   // comment to task 4" was read as a request to create a task.
-  if (COMMENT_VERB.test(trimmed) && taskRef) {
+  if ((COMMENT_VERB.test(trimmed) || COMMENT_VERB_HI.test(trimmed)) && taskRef) {
     const cmd = blank('add_comment', 'rule', 0.9);
     cmd.taskRef = taskRef;
     cmd.comment = extractCommentBody(afterTaskRef(trimmed, taskRef) ?? trimmed);
@@ -637,7 +997,7 @@ export function parseWithRules(text: string): ParsedCommand | null {
   }
 
   // ── Priority ──────────────────────────────────────────────────────────────
-  if (PRIORITY_VERB.test(trimmed)) {
+  if (PRIORITY_VERB.test(trimmed) || PRIORITY_VERB_HI.test(trimmed)) {
     const cmd = blank('set_priority', 'rule', 0.6);
     cmd.taskRef  = taskRef;
     cmd.priority = PRIORITY_CANON[trimmed.match(PRIORITY_VALUE)?.[1].toLowerCase() ?? ''] ?? null;
@@ -646,7 +1006,7 @@ export function parseWithRules(text: string): ParsedCommand | null {
   }
 
   // ── Deadline ──────────────────────────────────────────────────────────────
-  if (DEADLINE_VERB.test(trimmed)) {
+  if (DEADLINE_VERB.test(trimmed) || DEADLINE_VERB_HI.test(trimmed)) {
     const cmd = blank('set_deadline', 'rule', 0.6);
     cmd.taskRef = taskRef;
 
@@ -663,7 +1023,7 @@ export function parseWithRules(text: string): ParsedCommand | null {
   // ── Creation ──────────────────────────────────────────────────────────────
   // Last, so that anything referring to an existing ticket has already claimed
   // the message.
-  if (CREATE_VERB.test(trimmed)) {
+  if (CREATE_VERB.test(trimmed) || CREATE_VERB_HI.test(trimmed)) {
     const cmd = blank('create_task', 'rule', 0.6);
     setNames(cmd, extractNames(trimmed, null));
     cmd.assignmentIntent = detectAssignmentIntent(trimmed);
@@ -715,6 +1075,280 @@ function extractCommentBody(text: string): string | null {
   return body && body.length >= 2 ? body.replace(/[.]+$/, '') : null;
 }
 
+/**
+ * Recognise an instruction that involves an external party.
+ *
+ * Returns null for anything that is not one — which is nearly everything, so
+ * the cheap noun tests come first and the expensive name extraction only runs
+ * once an intent is established.
+ *
+ * Two shapes exist and they are not variants of each other:
+ *
+ *   DELEGATED  "Ask Sahil to send samples to Urja Vart"
+ *              → a task for Sahil. Sahil is told; Urja Vart is not messaged.
+ *
+ *   DIRECT     "Send a payment reminder to Ramesh Traders"
+ *              → a message to Ramesh Traders. No employee involved.
+ *
+ * The presence of an employee frame is what separates them, and getting it
+ * wrong is not a cosmetic error: one of these messages a stranger about money
+ * and the other does not.
+ */
+function parseOutreach(trimmed: string, taskRef: string | null): ParsedCommand | null {
+  const employeeName =
+    cleanName(trimmed.match(EMPLOYEE_FRAME)?.[1])
+    ?? cleanName(trimmed.match(EMPLOYEE_FRAME_TASK)?.[1])
+    ?? cleanName(trimmed.match(EMPLOYEE_FRAME_HI)?.[1]);
+
+  // ── Contact directory management ────────────────────────────────────────
+  if (REGISTER_CONTACT.test(trimmed)) {
+    const cmd = blank('register_contact', 'rule', 0.6);
+    cmd.contactType  = canonContactType(trimmed);
+    cmd.contactPhone = extractInlinePhone(trimmed);
+    cmd.contactName  = extractPartyName(trimmed, employeeName, { afterTypeWord: true });
+    // A name and a number is everything needed; either one missing is a
+    // question, not a failure.
+    if (cmd.contactName && cmd.contactPhone) cmd.confidence = 0.9;
+    return cmd;
+  }
+
+  if (SEARCH_CONTACT.test(trimmed)) {
+    const cmd = blank('search_contact', 'rule', 0.8);
+    cmd.contactName = extractPartyName(trimmed, employeeName, { afterTypeWord: true });
+    return cmd.contactName ? cmd : null;
+  }
+
+  // ── Direct messages to the party ────────────────────────────────────────
+  //
+  // Checked before the delegated forms: "send a payment reminder to X" also
+  // matches the dues vocabulary below, and the direct reading is the one the
+  // sender meant when they did not name an employee.
+  if (!employeeName && PAYMENT_REMINDER_DIRECT.test(trimmed)) {
+    const cmd = blank('send_payment_reminder', 'rule', 0.6);
+    fillMoneySlots(cmd, trimmed);
+    cmd.contactName = cleanContactName(trimmed.match(REMIND_PARTY)?.[1])
+      ?? extractPartyName(trimmed, null, {});
+    // A party plus either an amount or an invoice is actionable. A party alone
+    // is still the right intent — the executor asks for the missing half.
+    if (!cmd.contactName) return null;
+    cmd.confidence = (cmd.amount !== null || cmd.reference !== null) ? 0.9 : 0.6;
+    return cmd;
+  }
+
+  if (!employeeName && SAMPLE_NOTICE_DIRECT.test(trimmed)) {
+    const cmd = blank('send_sample_notice', 'rule', 0.6);
+    cmd.contactName     = extractPartyName(trimmed, null, {});
+    cmd.quantity        = trimmed.match(QUANTITY)?.[1] ?? null;
+    cmd.itemDescription = extractItem(trimmed, 'send_sample_notice', [cmd.contactName]);
+    if (!cmd.contactName) return null;
+    cmd.confidence = 0.9;
+    return cmd;
+  }
+
+  // ── Delegated work about a party ────────────────────────────────────────
+  //
+  // Each needs its noun AND a verb that acts on it. The noun alone is a
+  // worker reporting ("the samples arrived"), not a manager delegating.
+  const subject: CommandIntent | null =
+      SAMPLE_NOUN.test(trimmed) && SEND_ACTION.test(trimmed)    ? 'assign_sample_dispatch'
+    : STOCK_NOUN.test(trimmed)  && STOCK_ACTION.test(trimmed)   ? 'create_store_check_task'
+    : DUES_NOUN.test(trimmed)   && COLLECT_ACTION.test(trimmed) ? 'create_collection_task'
+    : SALES_NOUN.test(trimmed)  && SALES_ACTION.test(trimmed)   ? 'create_sales_task'
+    : null;
+
+  if (!subject) return null;
+
+  // Without somebody to do it this is not a delegation at all. Falling through
+  // lets the ordinary create/reassign branches have their say rather than
+  // inventing an assignee.
+  if (!employeeName) return null;
+
+  const cmd = blank(subject, 'rule', 0.6);
+  cmd.taskRef  = taskRef;
+  setNames(cmd, [employeeName]);
+  cmd.contactName     = extractPartyName(trimmed, employeeName, {});
+  cmd.deadlineText    = trimmed.match(DEADLINE_CREATE)?.[1]?.trim() ?? bareDeadline(trimmed);
+  cmd.quantity        = trimmed.match(QUANTITY)?.[1] ?? null;
+  cmd.itemDescription = extractItem(trimmed, subject, [cmd.contactName, employeeName]);
+  fillMoneySlots(cmd, trimmed);
+
+  // An employee to do it and a party it concerns is the whole instruction.
+  // A stock check legitimately has no outside party — "check if A12 is in the
+  // store" concerns nobody but us — so it is not held back for one.
+  if (cmd.contactName || subject === 'create_store_check_task') cmd.confidence = 0.9;
+
+  return cmd;
+}
+
+/**
+ * A date word standing on its own at the end of the sentence.
+ *
+ * `DEADLINE_CREATE` requires a preposition — "by Friday", "before tomorrow" —
+ * which people routinely omit when the instruction is already an instruction:
+ * "…send the samples to Urja Vart tomorrow". Without this the date was simply
+ * dropped and the task got the default deadline instead of the stated one.
+ *
+ * Deliberately narrow: only words that can ONLY be dates. Anything less
+ * certain is left to `parseDeadline` to refuse, which asks rather than guesses.
+ */
+function bareDeadline(text: string): string | null {
+  const m = text.match(
+    /\b(today|tomorrow|day after tomorrow|aaj|aj|kal|para?s(?:o|oo)?n?|next week|ag(?:a)?le\s+ha(?:ph|f|p)te|monday|tuesday|wednesday|thursday|friday|saturday|sunday|som[av]ar|mangal[av]ar|budh[av]ar|guru[av]ar|shukra?[av]ar|shani[av]ar|ravi[av]ar)\b\s*[.!?]?\s*$/i,
+  );
+  return m?.[1] ?? null;
+}
+
+/** Read the amount and reference a money instruction carries. */
+function fillMoneySlots(cmd: ParsedCommand, text: string): void {
+  const amount = extractAmount(text);
+  if (amount) {
+    cmd.amount   = amount.value;
+    cmd.currency = amount.currency;
+  }
+  cmd.reference = extractDocRef(text);
+}
+
+function canonContactType(text: string): string | null {
+  const word = text.match(CONTACT_TYPE_WORD)?.[1]?.toLowerCase();
+  return word ? (CONTACT_TYPE_CANON[word] ?? 'other') : null;
+}
+
+function extractInlinePhone(text: string): string | null {
+  const m = text.match(INLINE_PHONE);
+  const digits = m?.[1] ?? m?.[2] ?? null;
+  return digits && digits.length >= 10 ? digits : null;
+}
+
+/**
+ * The external party named in the message.
+ *
+ * `PARTY_AFTER` finds every "to/for/from <name>" phrase; the party is normally
+ * the LAST of them, because the employee's own "to" belongs to the delegation
+ * verb and comes first. Any capture that resolves to the employee is discarded
+ * outright — "ask Sahil to send samples to Sahil" is not a sentence anybody
+ * writes, so a match on the employee means the wrong phrase was picked.
+ */
+function extractPartyName(
+  text: string,
+  employeeName: string | null,
+  opts: { afterTypeWord?: boolean },
+): string | null {
+  // "register vendor Ramesh Traders 98765…" — the name follows the type word,
+  // not a preposition.
+  if (opts.afterTypeWord) {
+    const typed = text.match(
+      /\b(?:customer|vendor|seller|supplier|buyer|client|party|contact|grahak|vikreta)\s+(.+)$/i,
+    )?.[1];
+    const name = cleanContactName(typed?.replace(INLINE_PHONE, '').trim());
+    if (name) return name;
+  }
+
+  const employeeKey = employeeName?.toLowerCase().trim();
+  const candidates: string[] = [];
+
+  // `PARTY_MARKER` is global and therefore stateful — reset before each sweep,
+  // or the second call in a process starts wherever the first one stopped.
+  PARTY_MARKER.lastIndex = 0;
+  for (const m of text.matchAll(PARTY_MARKER)) {
+    // Read forward from the marker. `cleanContactName` stops at the first word
+    // that cannot be part of a name, which is what discards the delegating
+    // "to send …" while keeping the "to Urja Vart" later in the same sentence.
+    const name = cleanContactName(text.slice(m.index + m[0].length));
+    if (!name) continue;
+    if (employeeKey && name.toLowerCase() === employeeKey) continue;
+    candidates.push(name);
+  }
+
+  // Hindi postpositions, read backwards from each marker.
+  PARTY_MARKER_HI.lastIndex = 0;
+  for (const m of text.matchAll(PARTY_MARKER_HI)) {
+    const name = nameEndingAt(text.slice(0, m.index));
+    if (!name) continue;
+    if (employeeKey && name.toLowerCase() === employeeKey) continue;
+    candidates.push(name);
+  }
+
+  // The last one: the employee's own marker always comes first, so anything
+  // after it is more likely to be who the work concerns.
+  return candidates.length ? candidates[candidates.length - 1] : null;
+}
+
+/**
+ * The name immediately preceding a Hindi postposition.
+ *
+ * Walks backwards from the end of `before`, collecting words while they still
+ * look like part of a name and stopping at the first verb or clause word. That
+ * is what turns "…bolo Urja Vart" into "Urja Vart" rather than dragging the
+ * delegating verb in with it.
+ */
+function nameEndingAt(before: string): string | null {
+  const words = before.trim().split(/\s+/);
+  const collected: string[] = [];
+
+  for (let i = words.length - 1; i >= 0 && collected.length < 4; i--) {
+    const bare = words[i]
+      .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9.'’&\-]+$/g, '')
+      .replace(/\.+$/, '');
+    if (!bare) break;
+    if (CONTACT_STOP.test(bare) || CONTACT_STOP_VERB.test(bare)) break;
+    collected.unshift(bare);
+  }
+
+  const name = collected.join(' ').trim();
+  if (name.length < 2) return null;
+  return name.replace(/\s+(?:ji|sir|madam|bhai|saheb|sahab)$/i, '').trim() || null;
+}
+
+/**
+ * What is being sent, checked or ordered.
+ *
+ * Per-intent rather than one pattern, because the same preposition means
+ * different things in each. In "create a sale for DGH" the word after "for" is
+ * the CUSTOMER; in "samples of Fabric A12" the word after "of" is the goods.
+ * A single greedy rule read the party as the item and the employee as the item
+ * in turn, and an item ends up quoted in a message to a customer.
+ *
+ * Conservative by design: null is a fine answer. The instruction is carried
+ * verbatim in the task title either way, so nothing is lost by not guessing.
+ */
+function extractItem(text: string, intent: CommandIntent, exclude: Array<string | null>): string | null {
+  const banned = new Set(exclude.filter(Boolean).map((v) => v!.toLowerCase()));
+
+  const patterns: RegExp[] =
+      intent === 'assign_sample_dispatch' || intent === 'send_sample_notice'
+        ? [/\bsamples?\s+of\s+(.+)$/i, /\bof\s+(.+)$/i]
+    : intent === 'create_store_check_task'
+        // "check whether XYZ fabric is available", "check if A12 is in stock",
+        // "A12 stock check karo" — the goods sit between the verb and the
+        // availability word.
+        ? [/\b(?:whether|if|kya)\s+(.+?)\s+(?:is|are|hai|available|in\s+stock|stock)\b/i,
+           /\bcheck\s+(?:the\s+)?(?:stock|availability|inventory)\s+(?:of|for)\s+(.+)$/i,
+           /\bcheck\s+(?:whether\s+|if\s+)?(.+?)\s+(?:is|are|hai)\b/i]
+    : intent === 'create_sales_task'
+        // Only "of". "for" introduces the buyer.
+        ? [/\b(?:sale|sales|order)\s+of\s+(.+)$/i, /\bof\s+(.+)$/i]
+    : [];
+
+  for (const pattern of patterns) {
+    const raw = text.match(pattern)?.[1];
+    const item = trimItem(raw);
+    if (item && !banned.has(item.toLowerCase())) return item;
+  }
+  return null;
+}
+
+/** Cut an item description at the first word that starts a new clause. */
+function trimItem(raw: string | undefined): string | null {
+  if (!raw) return null;
+
+  const cut = raw.split(
+    /\s+\b(?:to|from|by|before|due|tomorrow|today|kal|aaj|parso|and\s+send|please|pls|asap|tak|ko)\b/i,
+  )[0];
+
+  const item = cut.trim().replace(/[.,;:]+$/, '');
+  return item.length >= 2 && item.length <= 120 ? item : null;
+}
+
 // ─── Stage 2: the model ───────────────────────────────────────────────────────
 
 /**
@@ -734,11 +1368,18 @@ const COMMAND_PROMPT = [
   'Messages may be in English, Hindi, Marathi, or a mix, and voice-note transcripts are often noisy.',
   '',
   'Reply with ONLY a JSON object. No markdown fence, no commentary, no reasoning:',
-  '{"intent":"reassign_ticket|create_task|add_comment|set_priority|set_deadline|duplicate_task|bulk_reassign|undo_last|none",',
-  ' "ticket":"<digits or null>","targets":["<person name>", ...],"title":"<task title or null>",',
+  '{"intent":"reassign_ticket|create_task|add_comment|set_priority|set_deadline|duplicate_task|',
+  'bulk_reassign|undo_last|assign_sample_dispatch|create_sales_task|create_store_check_task|',
+  'create_collection_task|send_payment_reminder|send_sample_notice|register_contact|search_contact|none",',
+  ' "ticket":"<digits or null>","targets":["<EMPLOYEE name>", ...],"title":"<task title or null>",',
   ' "deadline":"<date phrase exactly as written, or null>","priority":"High|Medium|Low|null",',
   ' "comment":"<comment text or null>","reason":"<stated reason or null>","from":"<name or null>",',
-  ' "assignment":"shared|separate|null","replaces":true|false,"confidence":<0.0-1.0>}',
+  ' "assignment":"shared|separate|null","replaces":true|false,',
+  ' "contact":"<EXTERNAL party name or null>","phone":"<digits or null>",',
+  ' "contact_type":"customer|vendor|seller|supplier|buyer|null",',
+  ' "amount":<number or null>,"currency":"INR|null","reference":"<invoice/order ref or null>",',
+  ' "item":"<what is being sent/checked/ordered, or null>","quantity":"<how much, or null>",',
+  ' "confidence":<0.0-1.0>}',
   '',
   'intent:',
   '  reassign_ticket = move an EXISTING ticket to a different person',
@@ -749,12 +1390,32 @@ const COMMAND_PROMPT = [
   '  duplicate_task  = make a COPY of an existing ticket, leaving the original alone',
   '  bulk_reassign   = move ALL of one person\'s open tickets to somebody else',
   '  undo_last       = reverse the sender\'s most recent action',
+  '',
+  '  These four create a TASK FOR AN EMPLOYEE about an outside party. Nobody',
+  '  outside the company is messaged:',
+  '  assign_sample_dispatch  = tell an employee to send samples to a party',
+  '  create_sales_task       = tell an employee to raise a sale/order for a party',
+  '  create_store_check_task = tell an employee to check stock or availability',
+  '  create_collection_task  = tell an employee to chase money owed by a party',
+  '',
+  '  These two MESSAGE THE OUTSIDE PARTY DIRECTLY. Use them ONLY when no',
+  '  employee is told to do anything:',
+  '  send_payment_reminder   = message a party about money they owe',
+  '  send_sample_notice      = message a party that samples are on the way',
+  '',
+  '  register_contact = save a new external party (needs a name and a phone number)',
+  '  search_contact   = look up an external party',
   '  none            = anything else',
   '',
   'CRITICAL: a person reporting on their OWN work is ALWAYS "none". These are all "none":',
   '  "task 1060 done"   "done"   "in progress"   "I have a problem"   "need more time"',
   '  "ho gaya"   "kar raha hoon"   "काम पूरा हो गया"   "will finish tomorrow"',
-  'Only a message asking to change WHO OWNS a ticket, or to create one, is a command.',
+  '  "payment ho gaya"   "sample bhej diya"   "stock check kar liya"   "maal aa gaya"',
+  'The last four matter: a worker saying the payment came in, or that they have already',
+  'sent the samples, is REPORTING. It is "none". It must never become an instruction to',
+  'message a customer about money.',
+  'Only a message asking to change WHO OWNS a ticket, to create one, or to message an',
+  'outside party, is a command.',
   '',
   'ticket: digits only, from "TSK-1059", "Tsk 1059", "task number 1059", "टास्क 1059", or a',
   'bare "1059". Ticket numbers can be SHORT — "TSK-4", "task 7" and "task 12" are valid and',
@@ -762,9 +1423,29 @@ const COMMAND_PROMPT = [
   'stated. null if none is stated — never infer or invent one. Quantities are not',
   'ticket numbers: "need 2 more days" contains no ticket.',
   '',
-  'targets: every person named, in order, exactly as the sender wrote them — misspellings',
+  'targets: every EMPLOYEE named, in order, exactly as the sender wrote them — misspellings',
   'included, do NOT correct them. [] if nobody is named. "me", "myself", "someone" and',
   '"the team" are not names.',
+  '',
+  'contact vs targets — the single most important distinction in this prompt.',
+  '"targets" is somebody who WORKS HERE and is being given work. "contact" is an',
+  'outside business or person the work CONCERNS. A message can name both:',
+  '  "Ask Sahil to send fabric samples to Urja Vart"',
+  '     targets=["Sahil"]  contact="Urja Vart"  intent=assign_sample_dispatch',
+  '  "Create a task for Ashish to collect dues from Ramesh ji"',
+  '     targets=["Ashish"] contact="Ramesh ji"  intent=create_collection_task',
+  '  "Send a payment reminder of Rs 45,000 to Ramesh Traders"',
+  '     targets=[]         contact="Ramesh Traders" amount=45000 intent=send_payment_reminder',
+  'If an employee is told to do something, it is one of the four TASK intents —',
+  'never send_payment_reminder, which messages the outsider instead.',
+  'Keep a company name whole: "Urja Vart Textiles" is one contact, not two names.',
+  '',
+  'amount: a plain number in rupees. "45,000" -> 45000. "45 hazaar" -> 45000.',
+  '"2 lakh" -> 200000. "45k" -> 45000. null if no money is mentioned. NEVER guess an',
+  'amount, and never copy a ticket number or a quantity into it.',
+  '',
+  'reference: an invoice, bill or order number as written — "INV-102", "SO-1187".',
+  'A reference is not a ticket: put it in "reference", leave "ticket" null.',
   '',
   'assignment: only when more than one person is named.',
   '  "shared"   = one task they do together ("together", "jointly", "same task", "mil kar")',
@@ -778,11 +1459,28 @@ const COMMAND_PROMPT = [
   '',
   'confidence: your certainty that this IS a management command and that you read the slots',
   'correctly. Use below 0.7 if you are guessing at any part of it.',
+  '',
+  'Hindi and Hinglish are first-class, not a fallback. Worked examples:',
+  '  "vedant ko task 4 de do"',
+  '     {"intent":"reassign_ticket","ticket":"4","targets":["vedant"],"replaces":true,...}',
+  '  "साहिल के लिए नया टास्क बनाओ - कल तक रिपोर्ट"',
+  '     {"intent":"create_task","targets":["साहिल"],"title":"रिपोर्ट","deadline":"कल",...}',
+  '  "Sahil ko bolo Urja Vart ko sample bhej de"',
+  '     {"intent":"assign_sample_dispatch","targets":["Sahil"],"contact":"Urja Vart",...}',
+  '  "रमेश ट्रेडर्स को 45 हज़ार का payment reminder भेजो"',
+  '     {"intent":"send_payment_reminder","targets":[],"contact":"रमेश ट्रेडर्स","amount":45000,...}',
+  '  "Gaurav se poocho A12 fabric stock me hai kya"',
+  '     {"intent":"create_store_check_task","targets":["Gaurav"],"item":"A12 fabric",...}',
+  'Report names in the script the sender used. Do NOT translate or transliterate them —',
+  'the system matches across scripts by itself.',
 ].join('\n');
 
 const AI_INTENTS: CommandIntent[] = [
   'reassign_ticket', 'create_task', 'add_comment', 'set_priority', 'set_deadline',
   'duplicate_task', 'bulk_reassign', 'undo_last',
+  'assign_sample_dispatch', 'create_sales_task', 'create_store_check_task',
+  'create_collection_task', 'send_payment_reminder', 'send_sample_notice',
+  'register_contact', 'search_contact',
 ];
 
 function str(v: unknown): string | null {
@@ -845,6 +1543,22 @@ async function parseWithAI(text: string): Promise<ParsedCommand | null> {
       priority:   PRIORITY_CANON[str(parsed.priority)?.toLowerCase() ?? ''] ?? null,
       comment:    str(parsed.comment),
       reason:     str(parsed.reason),
+
+      // Outreach slots. The contact name is deliberately NOT run through
+      // `cleanName`: that cleaner is tuned for personal names and cuts at the
+      // first word it does not recognise as one, which would turn
+      // "Urja Vart Textiles" into "Urja" and "Metro Logistics Pvt Ltd" into
+      // "Metro". A business name is resolved against the contact directory,
+      // where the full string is the useful key.
+      contactName:     str(parsed.contact),
+      contactPhone:    normaliseTypedPhone(str(parsed.phone)),
+      contactType:     str(parsed.contact_type)?.toLowerCase() ?? null,
+      amount:          toAmount(parsed.amount),
+      currency:        str(parsed.currency)?.toUpperCase() ?? (parsed.amount != null ? 'INR' : null),
+      reference:       str(parsed.reference)?.toUpperCase() ?? null,
+      itemDescription: str(parsed.item),
+      quantity:        str(parsed.quantity),
+
       confidence: Math.min(
         Number.isFinite(rawConfidence) ? Math.max(0, rawConfidence) : 0.5,
         AI_CONFIDENCE_CEILING,

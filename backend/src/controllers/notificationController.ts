@@ -45,6 +45,13 @@ export async function listNotifications(req: Request, res: Response): Promise<vo
       where: {
         direction: MessageDirection.inbound,
         createdAt: { gt: since },
+        // Employee threads only. `userId` is nullable now that a conversation
+        // can belong to an external contact, and a contact's reply does not
+        // belong in the team's notification bell — it is routed to the one
+        // person who owns that relationship instead. Stating the filter
+        // explicitly rather than relying on the relation filter below to imply
+        // it, so the intent survives someone editing `conversationScope`.
+        userId: { not: null },
         user: conversationScope(role, userId),
       },
       include: {
@@ -72,6 +79,9 @@ export async function listNotifications(req: Request, res: Response): Promise<vo
   // ── Collapse conversation messages: one entry per person ─────────────────
   const byUser = new Map<string, typeof inbound>();
   for (const m of inbound) {
+    // Narrowing, not filtering: the query above already excluded contact
+    // threads. This is what tells the compiler so.
+    if (!m.userId || !m.user) continue;
     const list = byUser.get(m.userId) ?? [];
     list.push(m);
     byUser.set(m.userId, list);
@@ -81,7 +91,7 @@ export async function listNotifications(req: Request, res: Response): Promise<vo
     // `inbound` is newest-first, so the first entry is the latest message.
     const latest = msgs[0];
     const count = msgs.length;
-    const firstName = latest.user.name.split(' ')[0];
+    const firstName = latest.user!.name.split(' ')[0];
 
     return {
       id:        `conv-${latest.userId}-${latest.id}`,
@@ -93,7 +103,7 @@ export async function listNotifications(req: Request, res: Response): Promise<vo
       taskTitle: latest.task?.title ?? null,
       needsAttribution: msgs.some((m) => m.needsAttribution),
       channel:   'whatsapp',   // by definition — these are inbound messages
-      by:        latest.user,
+      by:        latest.user!,
       createdAt: latest.createdAt,
     };
   });

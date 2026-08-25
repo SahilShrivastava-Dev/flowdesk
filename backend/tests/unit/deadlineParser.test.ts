@@ -97,3 +97,66 @@ describe('refusing to guess', () => {
     expect(parseDeadline('32/01', NOW)).toBeNull();
   });
 });
+
+// Hindi, in both scripts. Devanagari reaches these branches by being
+// transliterated on the way in, so each pair below must land identically.
+describe('Hindi deadlines', () => {
+  it.each([
+    ['aaj',                  '2026-08-05 18:00'],
+    ['आज',                    '2026-08-05 18:00'],
+    ['kal',                  '2026-08-06 18:00'],
+    ['कल',                    '2026-08-06 18:00'],
+    ['kal tak',              '2026-08-06 18:00'],
+    ['कल तक',                  '2026-08-06 18:00'],
+    ['parso',                '2026-08-07 18:00'],
+    ['परसों',                  '2026-08-07 18:00'],
+    ['2 din me',             '2026-08-07 18:00'],
+    ['2 दिन में',               '2026-08-07 18:00'],
+    ['agle hafte',           '2026-08-12 18:00'],
+    ['अगले हफ्ते',              '2026-08-12 18:00'],
+    ['अगले हफ्ते तक',           '2026-08-12 18:00'],
+    ['2 hafte me',           '2026-08-19 18:00'],
+    ['is mahine',            '2026-08-31 18:00'],
+    ['इस महीने',               '2026-08-31 18:00'],
+    ['महीने के अंत तक',          '2026-08-31 18:00'],
+  ])('%j → %s', (text, expected) => {
+    expect(stamp(parseDeadline(text, NOW))).toBe(expected);
+  });
+
+  it.each([
+    ['shukravar',            '2026-08-07 18:00'],
+    ['शुक्रवार',               '2026-08-07 18:00'],
+    ['shukravar tak',        '2026-08-07 18:00'],
+    ['शुक्रवार तक',             '2026-08-07 18:00'],
+    ['somvar',               '2026-08-10 18:00'],
+    ['सोमवार',                 '2026-08-10 18:00'],
+    ['mangalvar',            '2026-08-11 18:00'],
+    ['मंगलवार',                '2026-08-11 18:00'],
+    ['budhvar',              '2026-08-12 18:00'],   // today is Wednesday → next one
+    ['बुधवार',                 '2026-08-12 18:00'],
+    ['guruvar',              '2026-08-06 18:00'],
+    ['गुरुवार',                '2026-08-06 18:00'],
+    ['shanivar',             '2026-08-08 18:00'],
+    ['शनिवार',                 '2026-08-08 18:00'],
+    ['ravivar',              '2026-08-09 18:00'],
+    ['रविवार',                 '2026-08-09 18:00'],
+  ])('weekday %j → %s', (text, expected) => {
+    expect(stamp(parseDeadline(text, NOW))).toBe(expected);
+  });
+
+  it.each([
+    ['5 janvari',            '2027-01-05 18:00'],   // already past → next year
+    ['5 जनवरी',               '2027-01-05 18:00'],
+    ['20 agast',             '2026-08-20 18:00'],
+    ['20 अगस्त',              '2026-08-20 18:00'],
+    ['12 sitambar',          '2026-09-12 18:00'],
+    ['12 सितंबर',              '2026-09-12 18:00'],
+  ])('month name %j → %s', (text, expected) => {
+    expect(stamp(parseDeadline(text, NOW))).toBe(expected);
+  });
+
+  it('still refuses a Hindi phrase that is not a date', () => {
+    expect(parseDeadline('जल्दी', NOW)).toBeNull();
+    expect(parseDeadline('bahut zaroori', NOW)).toBeNull();
+  });
+});

@@ -73,9 +73,18 @@ Open http://localhost:5173 — you'll see the login screen.
    - Verify Token: `flowdesk-webhook-secret` (matches `META_VERIFY_TOKEN`)
    - Subscribe to: `messages`
 
-7. **Submit two message templates** for Meta approval:
-   - `task_assignment`: "New task assigned: {{1}}. Deadline: {{2}}. Reply 'Done', 'Issue', or 'Delay'."
-   - `task_escalation`: "Alert: {{1}} has missed the deadline for {{2}}."
+7. **Submit the message templates** for Meta approval.
+
+   Bodies, both languages, and the parameter order the code passes are in
+   [`WHATSAPP_TEMPLATES.md`](WHATSAPP_TEMPLATES.md) — the single source of
+   truth. The copy that used to live here had drifted from the code, and Meta
+   renders parameters positionally, so a mismatch sends a message that reads
+   perfectly and states the wrong facts.
+
+   Eleven templates in total: six internal (employee notifications) and five
+   outreach (external parties). Each is submitted twice, `<name>_en` and
+   `<name>_hi`. Approval takes days, not hours, and a rejection resets the
+   clock — start this before the code needs it.
 
 8. Add employee phone numbers in the Admin dashboard user management, or directly in DB:
    ```sql

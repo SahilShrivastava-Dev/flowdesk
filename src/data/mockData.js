@@ -244,3 +244,126 @@ export const daysUntil = (iso) => {
   const ms = new Date(iso).getTime() - Date.now();
   return Math.round(ms / (1000 * 60 * 60 * 24));
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// External parties and invoices — demo mode only.
+//
+// The app ships in two modes: with VITE_API_URL it talks to the backend, and
+// without it, it runs entirely on this file as an interactive demo. Adding a
+// view that reads from the API without a mock counterpart makes the demo build
+// render an empty page, which is how the Parties page would have looked to
+// anybody evaluating it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const initialContacts = [
+  {
+    id: 'C1', name: 'Ramesh Traders', companyName: 'Ramesh Traders Pvt Ltd',
+    phone: '919876543210', type: 'customer', email: 'accounts@rameshtraders.in',
+    address: 'Jaipur, Rajasthan', notes: '', aliases: ['रमेश ट्रेडर्स', 'RT'],
+    externalRef: 'GST08AAB...', preferredLanguage: 'hi', ownerId: 'U101',
+    optInAt: '2026-07-02T09:00:00.000Z', optOutAt: null, archivedAt: null,
+    createdAt: '2026-07-01T09:00:00.000Z',
+    openInvoiceCount: 2, outstandingBalance: 70000,
+    lastMessageAt: '2026-08-24T11:20:00.000Z',
+  },
+  {
+    id: 'C2', name: 'Ramesh Textile Traders', companyName: 'Ramesh Textiles',
+    phone: '919812345678', type: 'customer', email: null,
+    address: 'Surat, Gujarat', notes: 'Different party from Ramesh Traders — do not merge.',
+    aliases: [], externalRef: null, preferredLanguage: 'hi', ownerId: 'U101',
+    optInAt: null, optOutAt: null, archivedAt: null,
+    createdAt: '2026-07-14T09:00:00.000Z',
+    openInvoiceCount: 0, outstandingBalance: 0, lastMessageAt: null,
+  },
+  {
+    id: 'C3', name: 'Urja Vart', companyName: 'Urja Vart Textiles',
+    phone: '919090909090', type: 'buyer', email: 'buying@urjavart.com',
+    address: 'Ahmedabad, Gujarat', notes: '', aliases: ['Urja'],
+    externalRef: null, preferredLanguage: 'en', ownerId: 'U102',
+    optInAt: '2026-06-20T09:00:00.000Z', optOutAt: null, archivedAt: null,
+    createdAt: '2026-06-18T09:00:00.000Z',
+    openInvoiceCount: 0, outstandingBalance: 0,
+    lastMessageAt: '2026-08-25T08:10:00.000Z',
+  },
+  {
+    id: 'C4', name: 'Metro Logistics', companyName: 'Metro Logistics',
+    phone: '919619608095', type: 'vendor', email: null,
+    address: 'Mumbai, Maharashtra', notes: 'Courier partner.', aliases: [],
+    externalRef: 'PO-7781', preferredLanguage: 'en', ownerId: 'U101',
+    optInAt: '2026-05-10T09:00:00.000Z', optOutAt: null, archivedAt: null,
+    createdAt: '2026-05-09T09:00:00.000Z',
+    openInvoiceCount: 1, outstandingBalance: 45000,
+    lastMessageAt: '2026-08-20T15:45:00.000Z',
+  },
+  {
+    id: 'C5', name: 'Deccan Stones', companyName: 'Deccan Stones & Supply',
+    phone: '919700112233', type: 'supplier', email: null,
+    address: 'Hyderabad, Telangana', notes: '', aliases: [],
+    externalRef: null, preferredLanguage: 'en', ownerId: 'U102',
+    optInAt: null, optOutAt: '2026-08-01T10:00:00.000Z', archivedAt: null,
+    createdAt: '2026-04-02T09:00:00.000Z',
+    openInvoiceCount: 0, outstandingBalance: 0,
+    lastMessageAt: '2026-08-01T10:00:00.000Z',
+  },
+];
+
+export const initialInvoices = [
+  {
+    id: 'INV1', number: 'INV-102', contactId: 'C1', amount: 25000, balance: 25000,
+    currency: 'INR', dueDate: '2026-09-05T12:30:00.000Z', status: 'open',
+    payable: false, notes: '', createdById: 'U101',
+    contact: { id: 'C1', name: 'Ramesh Traders', companyName: 'Ramesh Traders Pvt Ltd', type: 'customer' },
+  },
+  {
+    id: 'INV2', number: 'INV-2231', contactId: 'C1', amount: 60000, balance: 45000,
+    currency: 'INR', dueDate: '2026-08-20T12:30:00.000Z', status: 'partial',
+    payable: false, notes: 'Part payment received 12 Aug.', createdById: 'U101',
+    contact: { id: 'C1', name: 'Ramesh Traders', companyName: 'Ramesh Traders Pvt Ltd', type: 'customer' },
+  },
+  {
+    // payable: we owe THEM. Drives the other payment template — the one that
+    // says money is coming rather than asking for it.
+    id: 'INV3', number: 'BILL-4471', contactId: 'C4', amount: 45000, balance: 45000,
+    currency: 'INR', dueDate: '2026-09-12T12:30:00.000Z', status: 'open',
+    payable: true, notes: 'Courier charges, August.', createdById: 'U101',
+    contact: { id: 'C4', name: 'Metro Logistics', companyName: 'Metro Logistics', type: 'vendor' },
+  },
+];
+
+/** Labels and colours for the six party types, used across the directory. */
+export const CONTACT_TYPES = [
+  { id: 'customer', label: 'Customer', bg: 'bg-[#DBEAFE]', text: 'text-[#1D4ED8]' },
+  { id: 'vendor',   label: 'Vendor',   bg: 'bg-[#FEF3C7]', text: 'text-[#B45309]' },
+  { id: 'seller',   label: 'Seller',   bg: 'bg-[#EDE9FE]', text: 'text-[#6D28D9]' },
+  { id: 'supplier', label: 'Supplier', bg: 'bg-[#DCFCE7]', text: 'text-[#15803D]' },
+  { id: 'buyer',    label: 'Buyer',    bg: 'bg-[#E0F2FE]', text: 'text-[#0369A1]' },
+  { id: 'other',    label: 'Other',    bg: 'bg-[#F3F4F6]', text: 'text-[#374151]' },
+];
+
+export function contactTypeStyle(type) {
+  return CONTACT_TYPES.find((t) => t.id === type) ?? CONTACT_TYPES[5];
+}
+
+/** The five task kinds, for the tracker filter and the task detail panel. */
+export const TASK_KINDS = [
+  { id: 'internal',         label: 'Internal'      },
+  { id: 'sample_dispatch',  label: 'Samples'       },
+  { id: 'payment_followup', label: 'Payments'      },
+  { id: 'stock_check',      label: 'Stock'         },
+  { id: 'sales',            label: 'Sales'         },
+];
+
+export function taskKindLabel(kind) {
+  return TASK_KINDS.find((k) => k.id === kind)?.label ?? 'Internal';
+}
+
+/** ₹45,000 — Indian digit grouping, matching what the backend sends. */
+export function formatMoney(value, currency = 'INR') {
+  const n = Number(value ?? 0);
+  const hasPaise = Math.round(n * 100) % 100 !== 0;
+  const formatted = new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: hasPaise ? 2 : 0,
+    maximumFractionDigits: 2,
+  }).format(n);
+  return currency === 'INR' ? `\u20B9${formatted}` : `${currency} ${formatted}`;
+}

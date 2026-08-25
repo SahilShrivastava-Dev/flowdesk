@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ParsedCommand, detectAssignmentIntent, detectReplaces, mergeParsed, parseWithRules,
 } from '../../src/services/commandService';
+import { normaliseName } from '../../src/services/nameResolutionService';
 
 // The rule layer is what runs when no AI key is configured, so everything here
 // is the guaranteed floor of the feature rather than a best case.
@@ -125,11 +126,21 @@ describe('short ids do not turn every message into "create a task"', () => {
     expect(cmd?.taskRef).toBeNull();
   });
 
+  // These two now resolve to the more specific `create_store_check_task`.
+  // That is a refinement, not a behaviour change: both still create a task for
+  // Vedant with Friday's deadline and no ticket reference — the only
+  // difference is that the resulting task is filed under `stock_check` and can
+  // be filtered as such. What matters here is that they remain CREATIONS and
+  // are not swallowed by the reassign branch, which is what this block guards.
   it.each([
     'raise a new ticket for Vedant to check the stock by Friday',
     'make a task for Vedant to check the stock by Friday',
   ])('recognises %j as creation', (text) => {
-    expect(parseWithRules(text)?.intent).toBe('create_task');
+    const cmd = parseWithRules(text);
+    expect(cmd?.intent).toBe('create_store_check_task');
+    expect(cmd?.taskRef).toBeNull();
+    expect(normaliseName(cmd?.targetName ?? '')).toBe('vedant');
+    expect(cmd?.deadlineText).toBe('Friday');
   });
 });
 
@@ -332,5 +343,235 @@ describe('mergeParsed', () => {
       cmd({ source: 'ai', confidence: 0.7, targetName: 'Vedant' }),
     );
     expect(merged?.confidence).toBe(0.7);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bilingual parsing.
+//
+// Before the transliteration pass there was not one test in this file
+// asserting that a Hindi or Hinglish message produced a management intent —
+// every positive case was English, and the two Hindi lines that existed both
+// asserted the message was NOT a command. Devanagari input in fact matched
+// almost nothing: names are captured with `[A-Za-z]` and words delimited with
+// `\b`, both ASCII-only.
+//
+// Each case below is asserted in Devanagari and in Roman script, because a
+// sender switches between them freely and often mixes them in one message.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Hindi and Hinglish commands', () => {
+  describe('reassign', () => {
+    it.each([
+      'vedant ko task 4 de do',
+      'वेदांत को टास्क 4 दे दो',
+      'task 4 वेदांत को दे दो',
+      'टास्क 4 vedant ko de do',          // mixed script, one message
+    ])('reads %j as a reassignment', (text) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe('reassign_ticket');
+      expect(cmd?.taskRef).toBe('TSK-4');
+      expect(normaliseName(cmd?.targetName ?? '')).toBe('vedant');
+    });
+  });
+
+  describe('create', () => {
+    it.each([
+      'sahil ke liye naya task banao',
+      'साहिल के लिए नया टास्क बनाओ',
+    ])('reads %j as a creation', (text) => {
+      expect(parseWithRules(text)?.intent).toBe('create_task');
+    });
+  });
+
+  describe('comment', () => {
+    it.each([
+      'task 4 par tippani likho',
+      'टास्क 4 पर टिप्पणी लिखो',
+    ])('reads %j as a comment', (text) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe('add_comment');
+      expect(cmd?.taskRef).toBe('TSK-4');
+    });
+  });
+
+  describe('priority', () => {
+    it.each([
+      ['task 4 ki priority zaruri kar do',  'High'],
+      ['टास्क 4 की priority ज़रूरी कर दो',      'High'],
+      ['task 4 ki priority kam kar do',     'Low'],
+    ])('reads %j as priority %s', (text, priority) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe('set_priority');
+      expect(cmd?.priority).toBe(priority);
+    });
+  });
+
+  describe('deadline', () => {
+    it.each([
+      'task 4 ki deadline badal do kal tak',
+      'टास्क 4 की deadline बदल दो कल तक',
+    ])('reads %j as a deadline change', (text) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe('set_deadline');
+      expect(cmd?.taskRef).toBe('TSK-4');
+    });
+  });
+
+  describe('undo', () => {
+    it.each(['vapas karo', 'वापस करो', 'undo karo'])('reads %j as undo', (text) => {
+      expect(parseWithRules(text)?.intent).toBe('undo_last');
+    });
+  });
+
+  describe('bulk', () => {
+    it.each([
+      'vedant ke saare task vikranth ko de do',
+      'वेदांत के सारे टास्क विक्रांत को दे दो',
+    ])('reads %j as a bulk move', (text) => {
+      expect(parseWithRules(text)?.intent).toBe('bulk_reassign');
+    });
+  });
+
+  // The guard that matters most. A worker reporting on their own work must
+  // never be read as a command — otherwise "payment ho gaya" from a field
+  // employee starts moving other people's tickets around.
+  describe('a worker reporting their own work is never a command', () => {
+    it.each([
+      'ho gaya',
+      'हो गया',
+      'task 4 ho gaya',
+      'टास्क 4 पूरा हो गया',
+      'मैंने काम पूरा कर दिया',
+      'kal tak kar dunga',
+      'कल तक कर दूंगा',
+      'dikkat aa gayi',
+      'दिक्कत आ गई',
+    ])('%j parses to null', (text) => {
+      expect(parseWithRules(text)).toBeNull();
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Outreach.
+//
+// The distinction these tests exist to protect: a message that DELEGATES work
+// must create a task, and a message that does not must message the outside
+// party. Getting it backwards either drops the instruction or messages a
+// stranger about money — and both sentences look almost identical.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('outreach', () => {
+  describe('delegated — creates a task, contacts nobody outside', () => {
+    it.each([
+      ['Ask Sahil to send fabric samples to Urja Vart.',            'assign_sample_dispatch', 'Sahil',  'Urja Vart'],
+      ['Tell Sahil to send samples to Urja',                        'assign_sample_dispatch', 'Sahil',  'Urja'],
+      ['Can you ask Sahil to send the fabric samples to Urja Vart?','assign_sample_dispatch', 'Sahil',  'Urja Vart'],
+      ['Assign Sahil the sample dispatch for Urja Vart',            'assign_sample_dispatch', 'Sahil',  'Urja Vart'],
+      ['Create a task for Ashish to collect dues from Ramesh ji.',  'create_collection_task', 'Ashish', 'Ramesh'],
+      ['Ask Vedant to create a sale for DGH.',                      'create_sales_task',      'Vedant', 'DGH'],
+    ])('%j', (text, intent, employee, party) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe(intent);
+      expect(normaliseName(cmd?.targetName ?? '')).toBe(normaliseName(employee));
+      expect(cmd?.contactName).toBe(party);
+    });
+
+    // A store check often concerns nobody outside the company at all, so it is
+    // the one delegated intent that does not need a party.
+    it('reads a store check with no outside party', () => {
+      const cmd = parseWithRules('Create a task for Gaurav to check whether XYZ fabric is available in the store.');
+      expect(cmd?.intent).toBe('create_store_check_task');
+      expect(normaliseName(cmd?.targetName ?? '')).toBe('gaurav');
+      expect(cmd?.itemDescription).toBe('XYZ fabric');
+    });
+
+    it('captures the optional detail without demanding it', () => {
+      const cmd = parseWithRules('Ask Sahil to send 2-meter samples of Fabric A12 and B14 to Urja Vart tomorrow.');
+      expect(cmd?.intent).toBe('assign_sample_dispatch');
+      expect(cmd?.contactName).toBe('Urja Vart');
+      expect(cmd?.itemDescription).toContain('A12');
+      expect(cmd?.deadlineText).toBe('tomorrow');
+    });
+  });
+
+  describe('direct — messages the outside party', () => {
+    it.each([
+      ['Send a payment reminder of ₹45,000 to Ramesh Traders.',   'Ramesh Traders', 45_000, null],
+      ['Remind ABC Traders about invoice INV-102 for ₹25,000.',   'ABC Traders',    25_000, 'INV-102'],
+      ['Send a payment reminder of Rs 50000 to Metro Logistics',  'Metro Logistics', 50_000, null],
+    ])('%j', (text, party, amount, reference) => {
+      const cmd = parseWithRules(text);
+      expect(cmd?.intent).toBe('send_payment_reminder');
+      expect(cmd?.contactName).toBe(party);
+      expect(cmd?.amount).toBe(amount);
+      expect(cmd?.reference).toBe(reference);
+      // No employee is being told to do anything — that is what makes it direct.
+      expect(cmd?.targetName).toBeNull();
+    });
+
+    // The load-bearing case. Naming an employee turns the same subject matter
+    // into internal work, and must NOT message the party.
+    it('does not message the party when an employee is told to do it', () => {
+      const cmd = parseWithRules('Ask Ashish to collect the ₹45,000 dues from Ramesh Traders');
+      expect(cmd?.intent).toBe('create_collection_task');
+      expect(normaliseName(cmd?.targetName ?? '')).toBe('ashish');
+    });
+  });
+
+  describe('an amount is never read as a ticket number', () => {
+    it.each([
+      'Send a payment reminder of ₹45,000 to Ramesh Traders.',
+      'Remind ABC Traders about invoice INV-102 for ₹25,000.',
+    ])('%j carries no taskRef', (text) => {
+      expect(parseWithRules(text)?.taskRef).toBeNull();
+    });
+  });
+
+  describe('contact directory', () => {
+    it('reads a registration with a name and a number', () => {
+      const cmd = parseWithRules('register vendor Metro Logistics 9876543210');
+      expect(cmd?.intent).toBe('register_contact');
+      expect(cmd?.contactName).toBe('Metro Logistics');
+      expect(cmd?.contactPhone).toBe('9876543210');
+      expect(cmd?.contactType).toBe('vendor');
+    });
+
+    it('still returns the intent when the number is missing, so we can ask', () => {
+      const cmd = parseWithRules('add customer Urja Vart');
+      expect(cmd?.intent).toBe('register_contact');
+      expect(cmd?.contactName).toBe('Urja Vart');
+      expect(cmd?.contactPhone).toBeNull();
+      expect(cmd?.confidence).toBeLessThan(0.9);
+    });
+  });
+
+  describe('Hindi and Hinglish', () => {
+    it.each([
+      'Sahil ko bolo Urja Vart ko sample bhej de',
+      'साहिल को बोलो उर्जा वर्त को सैंपल भेज दे',
+    ])('%j delegates a sample dispatch', (text) => {
+      expect(parseWithRules(text)?.intent).toBe('assign_sample_dispatch');
+    });
+
+    it('reads a Hinglish amount', () => {
+      const cmd = parseWithRules('Ramesh Traders ko 45 hazaar ka payment reminder bhejo');
+      expect(cmd?.intent).toBe('send_payment_reminder');
+      expect(cmd?.amount).toBe(45_000);
+    });
+  });
+
+  // The guard that must survive every change to this file. A worker reporting
+  // on their own work must never trigger an outbound message about money.
+  describe('a worker reporting is never outreach', () => {
+    it.each([
+      'payment ho gaya',
+      'भुगतान हो गया',
+      'sample bhej diya',
+      'सैंपल भेज दिया',
+      'stock check kar liya',
+      'maal aa gaya',
+    ])('%j parses to null', (text) => {
+      expect(parseWithRules(text)).toBeNull();
+    });
   });
 });

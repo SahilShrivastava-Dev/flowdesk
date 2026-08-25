@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { maskNonTaskDigits } from './moneyParser';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What this service does
@@ -63,17 +64,49 @@ const TASK_REF_PATTERNS: RegExp[] = [
   /\b(\d{4,6})\b/,
 ];
 
+/** Every pattern except the trailing bare-number one. */
+const PREFIXED_TASK_REF_PATTERNS = TASK_REF_PATTERNS.slice(0, -1);
+const BARE_TASK_REF_PATTERN = TASK_REF_PATTERNS[TASK_REF_PATTERNS.length - 1];
+
+export interface TaskRefOptions {
+  /**
+   * Whether a naked 4–6 digit number may stand in for a task id.
+   *
+   * Defaults to true, which is right for a worker replying "1058 ho gaya".
+   * Pass false from anything that talks about money or documents — an
+   * outreach command carries amounts and invoice numbers in exactly that
+   * digit range and never refers to a ticket by bare number.
+   */
+  allowBare?: boolean;
+}
+
 /**
  * Pull a task reference out of free text and normalise it to `TSK-<n>`.
  * Returns null when the message contains no plausible task number.
+ *
+ * The prefixed patterns run against the text as written. The bare fallback
+ * runs against a copy with amounts, invoice references and money-context
+ * numbers masked out, because those live in the same 4–6 digit range and
+ * used to be silently read as ticket numbers:
+ *
+ *   "remind Metro Logistics about 45000 due Friday"  →  TSK-45000
+ *
+ * Splitting the two passes is what keeps "payment for task 1058" working —
+ * masking never touches a number that states its own prefix.
  */
-export function extractTaskRef(text: string): string | null {
+export function extractTaskRef(text: string, opts: TaskRefOptions = {}): string | null {
   if (!text?.trim()) return null;
 
-  for (const pattern of TASK_REF_PATTERNS) {
+  for (const pattern of PREFIXED_TASK_REF_PATTERNS) {
     const match = text.match(pattern);
     if (match?.[1]) return `TSK-${parseInt(match[1], 10)}`;
   }
+
+  if (opts.allowBare === false) return null;
+
+  const match = maskNonTaskDigits(text).match(BARE_TASK_REF_PATTERN);
+  if (match?.[1]) return `TSK-${parseInt(match[1], 10)}`;
+
   return null;
 }
 
@@ -85,8 +118,7 @@ export function extractTaskRef(text: string): string | null {
  */
 export function hasExplicitTaskRef(text: string): boolean {
   if (!text?.trim()) return false;
-  // Every pattern except the trailing bare-number one.
-  return TASK_REF_PATTERNS.slice(0, -1).some((p) => p.test(text));
+  return PREFIXED_TASK_REF_PATTERNS.some((p) => p.test(text));
 }
 
 // ─── Multilingual keyword banks (fallback path) ───────────────────────────────

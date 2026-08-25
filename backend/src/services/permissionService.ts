@@ -64,6 +64,72 @@ export async function assignableUsers(actor: Actor): Promise<AssignableUser[]> {
   return [];
 }
 
+export interface VisibleContact {
+  id: string;
+  name: string;
+  companyName: string | null;
+  phone: string;
+  type: string;
+  preferredLanguage: string;
+  optOutAt: Date | null;
+  ownerId: string;
+  /** Merged into the candidate list by `contactCandidates`, not used directly. */
+  aliases: string[];
+}
+
+/**
+ * Every external party `actor` is permitted to message.
+ *
+ * The contact-side counterpart of `assignableUsers`, and load-bearing for the
+ * same reason: this list IS the permission boundary. Name resolution only ever
+ * searches what this returns, so a sender cannot reach a contact outside their
+ * scope by phrasing the request differently — that contact was never a
+ * candidate.
+ *
+ *   Admin    → every live contact
+ *   Manager  → only the contacts they own
+ *   Employee → none. Employees do not message customers or vendors.
+ *
+ * Archived contacts are excluded for the same reason deactivated users are:
+ * the row is kept for its history, but it is not somebody to message today.
+ */
+export async function visibleContacts(actor: Actor): Promise<VisibleContact[]> {
+  const select = {
+    id: true, name: true, companyName: true, phone: true, type: true,
+    preferredLanguage: true, optOutAt: true, ownerId: true, aliases: true,
+  } as const;
+
+  const live = { archivedAt: null };
+
+  if (actor.role === 'Admin') {
+    return prisma.contact.findMany({ where: live, select, orderBy: { name: 'asc' } });
+  }
+
+  if (actor.role === 'Manager') {
+    return prisma.contact.findMany({
+      where: { ...live, ownerId: actor.id }, select, orderBy: { name: 'asc' },
+    });
+  }
+
+  return [];
+}
+
+/**
+ * May `actor` message `contactId`? Derived from the same set, never a separate
+ * rule — the two must not be able to disagree.
+ */
+export async function canMessageContact(actor: Actor, contactId: string): Promise<boolean> {
+  if (actor.role === 'Employee') return false;
+
+  const contact = await prisma.contact.findUnique({
+    where:  { id: contactId },
+    select: { id: true, ownerId: true, archivedAt: true },
+  });
+  if (!contact || contact.archivedAt !== null) return false;
+
+  return actor.role === 'Admin' || contact.ownerId === actor.id;
+}
+
 /** May `actor` assign work to `targetId`? Derived from the same set, never a separate rule. */
 export async function canAssignTo(actor: Actor, targetId: string): Promise<boolean> {
   if (actor.role === 'Admin') {

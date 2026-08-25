@@ -1,13 +1,18 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import TaskTable from '../components/TaskTable.jsx';
 import { useApp } from '../context/AppContext.jsx';
-import { directReports } from '../data/mockData.js';
+import { directReports, TASK_KINDS } from '../data/mockData.js';
 
 export default function TasksView({ onOpenTask, onCreateTask }) {
   const { tasks, role, activeUser } = useApp();
 
-  const list = useMemo(() => {
+  // Which kind of work. `internal` is the default on every task, including
+  // every task that existed before outreach did, so "All" and "Internal" are
+  // the same list until somebody raises their first sample or payment task.
+  const [kind, setKind] = useState('all');
+
+  const scoped = useMemo(() => {
     if (role === 'Employee') return tasks.filter((t) => t.assignedTo === activeUser.id);
     if (role === 'Manager') {
       const teamIds = directReports(activeUser.id).map((u) => u.id);
@@ -15,6 +20,24 @@ export default function TasksView({ onOpenTask, onCreateTask }) {
     }
     return tasks;
   }, [tasks, role, activeUser.id]);
+
+  const list = useMemo(
+    () => (kind === 'all' ? scoped : scoped.filter((t) => (t.kind ?? 'internal') === kind)),
+    [scoped, kind],
+  );
+
+  // Only shown once there is something to filter. A row of chips that all read
+  // "0" is noise on a deployment that never uses outreach.
+  const kindCounts = useMemo(() => {
+    const counts = {};
+    for (const t of scoped) {
+      const k = t.kind ?? 'internal';
+      counts[k] = (counts[k] ?? 0) + 1;
+    }
+    return counts;
+  }, [scoped]);
+
+  const hasOutreach = TASK_KINDS.some((k) => k.id !== 'internal' && kindCounts[k.id] > 0);
 
   const heading = role === 'Employee' ? 'My Assignments' : role === 'Manager' ? 'Team Tasks' : 'All tasks';
   const subtitle =
@@ -79,8 +102,40 @@ export default function TasksView({ onOpenTask, onCreateTask }) {
         ))}
       </div>
 
+      {hasOutreach && (
+        <div className="flex gap-1 flex-wrap">
+          <KindChip active={kind === 'all'} onClick={() => setKind('all')} count={scoped.length}>
+            All
+          </KindChip>
+          {TASK_KINDS.filter((k) => kindCounts[k.id] > 0).map((k) => (
+            <KindChip
+              key={k.id}
+              active={kind === k.id}
+              onClick={() => setKind(k.id)}
+              count={kindCounts[k.id]}
+            >
+              {k.label}
+            </KindChip>
+          ))}
+        </div>
+      )}
+
       {/* Table with built-in filter row */}
       <TaskTable tasks={list} onOpen={onOpenTask} />
     </div>
+  );
+}
+
+function KindChip({ active, onClick, count, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+        active ? 'bg-[#1E1B3A] text-white' : 'bg-white border border-[#E5E7EB] text-[#374151] hover:bg-gray-50'
+      }`}
+    >
+      {children}
+      <span className={`num ml-1.5 ${active ? 'text-white/70' : 'text-[#9CA3AF]'}`}>{count}</span>
+    </button>
   );
 }

@@ -67,6 +67,43 @@ describe('extractTaskRef', () => {
     expect(extractTaskRef(text)).toBeNull();
   });
 
+  // Money collides with the bare-number fallback. Every rupee amount an Indian
+  // business types sits in the same 4–6 digit range a task id does, so
+  // "remind Metro about 45000" used to resolve to TSK-45000 and quietly point
+  // an outreach command at a ticket that has nothing to do with it.
+  it.each([
+    'remind Metro Logistics about 45000 due Friday',
+    'send a payment reminder of ₹45,000',
+    'Rs. 45000 pending from Ramesh Traders',
+    'payment of 25000 is outstanding',
+    'clear invoice INV-2231',
+    'बकाया 45000 का भुगतान',
+    '45 हज़ार का payment reminder भेजो',
+  ])('does not read an amount or invoice number as a task in %j', (text) => {
+    expect(extractTaskRef(text)).toBeNull();
+  });
+
+  // The masking that makes the above work must never touch a number that
+  // states its own prefix — otherwise fixing money would break the far more
+  // common case of a manager naming a ticket alongside an amount.
+  it.each([
+    ['payment for task 1058 is 45000',        'TSK-1058'],
+    ['TSK-1058 — ₹45,000 collected',          'TSK-1058'],
+    ['task 4 invoice INV-102 done',           'TSK-4'],
+    ['टास्क 1058 का बकाया 45000',                'TSK-1058'],
+  ])('still reads the stated task number in %j', (text, expected) => {
+    expect(extractTaskRef(text)).toBe(expected);
+  });
+
+  // Outreach commands carry amounts and invoice numbers and never name a
+  // ticket by bare number, so they opt out of the fallback entirely.
+  it('drops the bare fallback when the caller opts out', () => {
+    expect(extractTaskRef('1058 done')).toBe('TSK-1058');
+    expect(extractTaskRef('1058 done', { allowBare: false })).toBeNull();
+    // A stated reference still resolves — opting out only silences guessing.
+    expect(extractTaskRef('task 1058 done', { allowBare: false })).toBe('TSK-1058');
+  });
+
   it('reads the task number, not the quantity', () => {
     expect(extractTaskRef('I need 2 days for task 1057')).toBe('TSK-1057');
     expect(extractTaskRef('I need 2 days for task 7')).toBe('TSK-7');

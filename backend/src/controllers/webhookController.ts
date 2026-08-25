@@ -8,10 +8,12 @@ import { ACTIVITY_TYPE, MAX_LIST_ROWS } from '../lib/constants';
 import { storeWhatsAppMedia, downloadWhatsAppMedia, uploadBufferToCloudinary } from '../services/mediaService';
 import { transcribeAudio } from '../services/transcriptionService';
 import { analyzeMessage, hasExplicitTaskRef, IntentResult } from '../services/intentService';
+import { handleContactReply } from '../services/contactReplyService';
 import { decideAttribution } from '../services/attributionService';
 import {
   adoptRecentUnattributed, findPendingAttribution, getLastAttributedTaskId,
   getUserTaskContext, kindFromMetaType, resolveUserByPhone, taskHasEvidence,
+  resolveContactByPhone,
 } from '../services/conversationService';
 import { sendInteractiveList, sendTextMessage } from '../services/whatsappService';
 import {
@@ -223,10 +225,41 @@ async function processMessage(message: any): Promise<void> {
   }
 
   // ── 2. Who is this? ──────────────────────────────────────────────────────
+  //
+  // An employee or an external contact. A phone number identifies exactly one
+  // of the two — `contactService` refuses to save a contact on a number that
+  // belongs to a live user — so this is a lookup, not a judgement call.
+  //
+  // `User` is tried first and wins any collision that somehow exists: somebody
+  // who both works here and sells to us is an employee, and reading their
+  // "done" as a vendor's reply would lose a task update.
   const senderPhone = String(message.from ?? '').replace(/\D/g, '');
   const user = await resolveUserByPhone(senderPhone);
+
   if (!user) {
-    console.log(`[Webhook] No user matches phone ${senderPhone} — ignoring`);
+    const contact = await resolveContactByPhone(senderPhone);
+    if (contact) {
+      // ── 2b. An external party replied ───────────────────────────────────
+      //
+      // This diverges completely and deliberately. Everything below is the
+      // worker pipeline: `analyzeMessage` classifies a message as done/issue/
+      // delay/progress — a person reporting on a task they hold. A vendor
+      // holds no task, and putting their "Payment done" through it would move
+      // somebody else's work to a state nobody asked for.
+      const contactContent = await extractContent(message);
+      if (!contactContent) return;
+
+      await handleContactReply({
+        contactId:   contact.id,
+        text:        contactContent.text,
+        waMessageId,
+        mediaUrl:    contactContent.mediaUrl,
+        kind:        contactContent.kind as never,
+      });
+      return;
+    }
+
+    console.log(`[Webhook] No user or contact matches phone ${senderPhone} — ignoring`);
     return;
   }
 
@@ -336,6 +369,8 @@ interface WebhookUser {
   name: string;
   phone: string | null;
   role: string;
+  /** Drives both the outbound template suffix and the language we answer in. */
+  preferredLanguage: string;
 }
 
 async function handleAsCommand(
@@ -345,6 +380,10 @@ async function handleAsCommand(
 ): Promise<boolean> {
   const actor: CommandActor = {
     id: user.id, name: user.name, role: user.role, phone: user.phone,
+    // Answers go back in the language they wrote in. `resolveUserByPhone`
+    // already selects this for the template picker; the reply layer reads the
+    // same column so the two can never disagree.
+    preferredLanguage: user.preferredLanguage,
   };
 
   // A photograph or document — either attached now, or referred to from a

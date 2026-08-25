@@ -9,6 +9,9 @@ import webhookRoutes from './routes/webhook';
 import notificationRoutes from './routes/notifications';
 import whatsappRoutes from './routes/whatsapp';
 import conversationRoutes from './routes/conversations';
+import contactRoutes from './routes/contacts';
+import invoiceRoutes from './routes/invoices';
+import commandRoutes from './routes/commands';
 import { errorHandler, installProcessGuards } from './middleware/errorHandler';
 import { verifyTokenOnStartup } from './services/whatsappService';
 import { startupSummary } from './services/commandExecutor';
@@ -50,6 +53,9 @@ app.use('/api/webhook', webhookRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/whatsapp',     whatsappRoutes);
 app.use('/api/conversations', conversationRoutes);
+app.use('/api/contacts',      contactRoutes);
+app.use('/api/invoices',      invoiceRoutes);
+app.use('/api/commands',      commandRoutes);
 
 // LAST, and after every route. Express identifies error middleware by its four
 // parameters, so this must stay four-argument and stay at the bottom — anywhere

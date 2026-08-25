@@ -27,7 +27,13 @@ import { prisma } from '../lib/prisma';
 //     is refused.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type StateKind = 'confirm' | 'choose_employee' | 'choose_task' | 'choose_option';
+export type StateKind =
+  | 'confirm'
+  | 'choose_employee'
+  | 'choose_task'
+  /** Which external party the sender meant, when several names are close. */
+  | 'choose_contact'
+  | 'choose_option';
 
 /** How long a pending question stays answerable. */
 export function stateTtlMs(): number {

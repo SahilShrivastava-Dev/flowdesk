@@ -149,8 +149,27 @@ Task overdue → boss   → task_escalation_supervisor (assignee + title)
 Admin sends message   → Free text (if within 24h session window)
                       → update_waiting (if session expired — names the sender)
 
+OUTBOUND (system → external party)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Sample dispatched     → sample_dispatch        (party + from + samples + date + ref)
+We owe a vendor       → payment_advice_vendor  (party + from + amount + ref + date)
+They owe us           → payment_due_reminder   (party + from + amount + ref + date)
+Availability question → stock_check_request    (party + from + item + qty + date)
+Order placed          → sales_order_placed     (party + from + lines + ref + date)
+
+Direction on the two payment templates comes from `Invoice.payable`, never from
+the wording — "remind Metro about BILL-4471" is the same sentence whether Metro
+owes us or we owe them, and the two templates tell the recipient opposite things
+about their account.
+
+A reminder ladder RE-SENDS the same template rather than using a `*_followup`
+variant, and stops after `WA_OUTREACH_MAX_CHASES`.
+
+Outside the 24-hour window an EMPLOYEE gets `update_waiting` to re-open it; a
+CONTACT gets nothing at all, and the send is refused with an explanation.
+
 Every one of the above exists as `_en` and `_hi`, picked by the recipient's
-`preferredLanguage`. All are recorded as outbound `Message` rows, so a template
+`preferredLanguage`. Bodies and parameter order: `WHATSAPP_TEMPLATES.md`. All are recorded as outbound `Message` rows, so a template
 send shows up in the tracker and Meta's delivery receipt has a row to match.
 
 INBOUND (employee → system, via webhook)

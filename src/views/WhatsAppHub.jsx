@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext.jsx';
+import CommandLogView from './CommandLogView.jsx';
 import { findUser } from '../data/mockData.js';
 import Avatar from '../components/Avatar.jsx';
 import TaskAttributionMenu from '../components/TaskAttributionMenu.jsx';
@@ -174,12 +175,14 @@ function ChatBubble({ msg, tasks, canEdit, onOpenTask, onReattribute }) {
 export default function WhatsAppHub({ focusUserId, onOpenTask }) {
   const {
     conversations, convLoading, threads, activeConvUserId, setActiveConvUserId,
-    loadMoreMessages, sendWhatsApp, reattributeMessage, setTaskStatus,
+    loadMoreMessages, sendWhatsApp, reattributeMessage, setTaskStatus, role,
   } = useApp();
 
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [warning, setWarning] = useState('');
+  // Which half of the Hub is showing. Admin-only; everyone else has one tab.
+  const [hubTab, setHubTab] = useState('threads');
   const scrollRef = useRef(null);
   const bottomRef = useRef(null);
   const lastMsgId = useRef(null);
@@ -278,7 +281,38 @@ export default function WhatsAppHub({ focusUserId, onOpenTask }) {
         <p className="text-sm text-[#6B7280] mt-0.5">
           One conversation per person — the same thread they see on WhatsApp. Each message shows the task it updated.
         </p>
+
+        {/* The command log lives here rather than in its own top-level page:
+            it answers a question about WhatsApp, and a separate dashboard for
+            one table would be a second place to look for the same thing. */}
+        {role === 'Admin' && (
+          <div className="flex items-center gap-1 border-b border-[#E5E7EB] mt-3">
+            {[
+              { id: 'threads',  label: 'Conversations' },
+              { id: 'commands', label: 'Commands' },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setHubTab(t.id)}
+                className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+                  hubTab === t.id
+                    ? 'border-[#1E1B3A] text-[#111827]'
+                    : 'border-transparent text-[#6B7280] hover:text-[#111827]'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {hubTab === 'commands' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto thin-scrollbar">
+          <CommandLogView />
+        </div>
+      ) : (
+      <>
 
       <div className="fd-card overflow-hidden grid grid-cols-1 md:grid-cols-3 flex-1 min-h-0">
 
@@ -287,7 +321,7 @@ export default function WhatsAppHub({ focusUserId, onOpenTask }) {
           {convLoading && conversations.length === 0 ? (
             <p className="p-4 text-sm text-[#9CA3AF]">Loading conversations…</p>
           ) : conversations.length === 0 ? (
-            <p className="p-4 text-sm text-[#9CA3AF]">No team members to message yet.</p>
+            <p className="p-4 text-sm text-[#9CA3AF]">No conversations yet.</p>
           ) : (
             <ul className="divide-y divide-[#F3F4F6]">
               {conversations.map((c) => {
@@ -311,10 +345,23 @@ export default function WhatsAppHub({ focusUserId, onOpenTask }) {
                             {shortAge(c.lastMessage?.createdAt)}
                           </span>
                         </div>
+                        {/* An outside party is labelled on every row. The two
+                            kinds of thread support different actions, and
+                            finding that out by clicking is the wrong order. */}
+                        {c.party === 'contact' && (
+                          <p className="text-[10px] font-semibold text-[#B45309] uppercase tracking-wide mt-0.5">
+                            {c.role}{c.companyName ? ` · ${c.companyName}` : ''}
+                          </p>
+                        )}
                         <p className="text-xs text-[#9CA3AF] truncate mt-0.5">
                           {c.lastMessage?.preview ?? 'No messages yet'}
                         </p>
                         <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                          {c.optedOut && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#FEE2E2] text-[#B91C1C]">
+                              Opted out
+                            </span>
+                          )}
                           {c.needsAttributionCount > 0 && (
                             <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#FEF3C7] text-[#92400E] inline-flex items-center gap-0.5">
                               <AlertTriangle className="h-2.5 w-2.5" />
@@ -326,9 +373,11 @@ export default function WhatsAppHub({ focusUserId, onOpenTask }) {
                               {c.overdueCount} overdue
                             </span>
                           )}
-                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#EFF6FF] text-[#1D4ED8]">
-                            {c.openTaskCount} open
-                          </span>
+                          {(c.party !== 'contact' || c.openTaskCount > 0) && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-[#EFF6FF] text-[#1D4ED8]">
+                              {c.openTaskCount} open
+                            </span>
+                          )}
                         </div>
                       </div>
                     </button>
@@ -491,6 +540,8 @@ export default function WhatsAppHub({ focusUserId, onOpenTask }) {
         <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-[#9CA3AF]" /> Session expired (template will reopen)</span>
         <span className="flex items-center gap-1.5"><AlertTriangle className="h-3 w-3 text-[#92400E]" /> Needs a task before it can change anything</span>
       </div>
+      </>
+      )}
     </div>
   );
 }
