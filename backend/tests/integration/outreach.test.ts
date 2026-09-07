@@ -71,9 +71,16 @@ beforeEach(async () => {
 
 afterAll(async () => { await prisma.$disconnect(); });
 
-/** Drive one inbound message all the way through the webhook. */
+/**
+ * Drive one inbound message all the way through the webhook.
+ *
+ * `processInbound` takes the WHOLE Meta body and unwraps
+ * `entry[0].changes[0].value` itself — handing it the unwrapped value makes it
+ * return silently, which looks exactly like a message that was correctly
+ * ignored.
+ */
 async function inbound(payload: unknown): Promise<void> {
-  await processInbound((payload as { entry: { changes: { value: unknown }[] }[] }).entry[0].changes[0].value);
+  await processInbound(payload);
 }
 
 /** The last thing the system said back to the sender. */

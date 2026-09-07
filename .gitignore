@@ -11,3 +11,6 @@ Problem_statment.txt
 backend/.env
 backend/dist
 .firebase/
+
+# Handover doc: contains plaintext credentials. Share via DM, never via git.
+*HANDOVER*.docx

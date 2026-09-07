@@ -37,4 +37,11 @@ export default async function setup(): Promise<void> {
     stdio: 'inherit',
     env: process.env,
   });
+
+  // `db push` applies everything Prisma can describe; these are the two rules
+  // it cannot. Without them the tests run against a schema that is subtly
+  // LOOSER than production — a suite that never exercises the constraint can
+  // pass on a write production would reject, which is the one kind of green
+  // build that teaches you nothing.
+  execSync('npm run db:constraints', { stdio: 'inherit', env: process.env });
 }

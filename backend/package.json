@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:int": "vitest run --config vitest.integration.config.ts",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:constraints": "ts-node prisma/apply-constraints.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

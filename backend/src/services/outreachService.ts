@@ -60,8 +60,22 @@ function requireOptIn(): boolean {
   return (process.env.WA_REQUIRE_OPTIN ?? 'false').toLowerCase() === 'true';
 }
 
-const COOLDOWN_S  = Number(process.env.WA_CONTACT_COOLDOWN_S ?? 86_400);
-const DAILY_CAP   = Number(process.env.WA_CONTACT_DAILY_CAP ?? 3);
+/**
+ * Read per call, not once at module load.
+ *
+ * Every other gate in this codebase — `commandsEnabled`, `confidenceThreshold`,
+ * `commandRoles` — is a function for the same reason: a limit captured at import
+ * time cannot be changed without a restart, and cannot be varied by a test at
+ * all. These two were constants, which made the daily cap silently unreachable
+ * because the cooldown had already been fixed at its default.
+ */
+function cooldownSeconds(): number {
+  return Number(process.env.WA_CONTACT_COOLDOWN_S ?? 86_400);
+}
+
+function dailyCap(): number {
+  return Number(process.env.WA_CONTACT_DAILY_CAP ?? 3);
+}
 
 /** What appears as {{2}} in every outreach template — who the message is from. */
 export function senderIdentity(actorName: string): string {
@@ -114,8 +128,8 @@ async function checkContactLimits(
   const sentToday = await prisma.message.count({
     where: { contactId, direction: MessageDirection.outbound, createdAt: { gt: since24h } },
   });
-  if (sentToday >= DAILY_CAP) {
-    return `This contact has already received ${sentToday} messages today`;
+  if (sentToday >= dailyCap()) {
+    return `This contact has already received ${sentToday} message(s) today`;
   }
 
   // A follow-up is part of a ladder the sender already agreed to, so it is
@@ -123,7 +137,10 @@ async function checkContactLimits(
   // the backstop against a runaway ladder.
   if (isFollowUp) return null;
 
-  const cooldownStart = new Date(now - COOLDOWN_S * 1000);
+  const cooldown = cooldownSeconds();
+  if (cooldown <= 0) return null;
+
+  const cooldownStart = new Date(now - cooldown * 1000);
   const recent = await prisma.message.findFirst({
     where:   { contactId, direction: MessageDirection.outbound, createdAt: { gt: cooldownStart } },
     orderBy: { createdAt: 'desc' },

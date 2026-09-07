@@ -2251,11 +2251,20 @@ async function execute(
 }
 
 function refusalMessage(err: TaskOpError, pending: PendingCommand): string {
+  // The rewrites below exist to turn a service-level message about a TICKET
+  // into a sentence naming the ticket the sender asked about. When there is no
+  // ticket they are actively wrong: an outreach refusal — "Deccan Stones has
+  // asked not to be messaged" — became "You do not have permission to change
+  // that ticket", which names a ticket that does not exist and hides the one
+  // fact the sender needed. The service already phrases these for a human, so
+  // they are passed through untouched.
+  if (!pending.taskId) return err.message;
+
   if (err.code === 'forbidden') {
     return err.message.includes('outside your permitted reporting structure')
-      ? `You cannot assign ${pending.taskId ?? 'this ticket'} to ${pending.targetName} because ` +
+      ? `You cannot assign ${pending.taskId} to ${pending.targetName} because ` +
         `they are outside your permitted reporting structure.`
-      : `You do not have permission to change ${pending.taskId ?? 'that ticket'}.`;
+      : `You do not have permission to change ${pending.taskId}.`;
   }
   if (err.code === 'not_found') {
     return `I could not find ticket ${pending.taskId}. Please check the ticket number and try again.`;

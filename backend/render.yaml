@@ -7,12 +7,16 @@ services:
     # migrations directory, so without it a deploy that adds a model ships code
     # querying a table the database doesn't have. It is additive and idempotent
     # — an unchanged schema is a no-op.
+    # `db:constraints` applies the two rules Prisma's schema language cannot
+    # express: a Message belongs to exactly one of a user or a contact, and a
+    # phone number identifies one party. Both are guarded, so re-running is a
+    # no-op — which matters because this runs on every deploy.
     # `db:backfill-assignees` gives every pre-existing task its TaskAssignee row.
     # It runs on every deploy and is idempotent (unique constraint +
     # skipDuplicates), which is the point: the join table is only safe to read
     # from once EVERY task has a row, and a deploy that skipped it would make
     # workers' own tasks disappear from WhatsApp.
-    buildCommand: npm install --include=dev && npx prisma generate && npx prisma db push --skip-generate && npm run db:backfill-assignees && npm run build
+    buildCommand: npm install --include=dev && npx prisma generate && npx prisma db push --skip-generate && npm run db:constraints && npm run db:backfill-assignees && npm run build
     startCommand: node dist/index.js
     healthCheckPath: /api/health
     envVars:

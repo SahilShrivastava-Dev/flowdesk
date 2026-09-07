@@ -14,7 +14,11 @@ export default defineConfig({
     globalSetup: ['tests/globalSetup.ts'],
     // Shared database — tests must not race each other.
     fileParallelism: false,
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    // Generous, because these talk to a REMOTE database. Re-seeding costs
+    // ~15s of round trips before a test does anything of its own, so 30s left
+    // no headroom and failed tests that were merely slow — which is the worst
+    // kind of flake, since it looks like a real defect.
+    testTimeout: 90_000,
+    hookTimeout: 90_000,
   },
 });

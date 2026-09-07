@@ -226,6 +226,25 @@ export function maskNonTaskDigits(text: string): string {
 }
 
 /**
+ * Does this message talk about money at all?
+ *
+ * Broader than `extractAmount`, deliberately. "remind Ramesh Traders about
+ * 45000 due Friday" states a sum with no currency marker and no thousands
+ * separator, so `extractAmount` cannot read it — correctly, since it will not
+ * guess. But the message is plainly about money, and a caller deciding whether
+ * a "remind" is a PAYMENT reminder needs that weaker signal.
+ *
+ * Reuses the same vocabulary the masking pass uses, so the two cannot drift
+ * into disagreeing about what looks monetary.
+ */
+export function looksMonetary(text: string): boolean {
+  if (!text?.trim()) return false;
+  return MONEY_PATTERNS.some((p) => p.test(text))
+    || MONEY_CONTEXT_PATTERNS.some((p) => p.test(text))
+    || DOC_REF_PATTERNS.some((p) => p.test(text));
+}
+
+/**
  * Format an amount the way it should appear in a WhatsApp template or a
  * confirmation: `45000` → `₹45,000`, with Indian digit grouping.
  *

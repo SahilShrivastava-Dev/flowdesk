@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { MODEL, NVIDIA_URL, extractTaskRef, parseLooseJson } from './intentService';
 import { transliterate } from '../lib/devanagari';
-import { extractAmount, extractDocRef } from './moneyParser';
+import { extractAmount, extractDocRef, looksMonetary } from './moneyParser';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Turning a manager's WhatsApp message into a structured command.
@@ -433,6 +433,17 @@ const CONTACT_TYPE_CANON: Record<string, string> = {
   party: 'other', contact: 'other',
 };
 
+/**
+ * What an invoice, order or docket reference looks like as a whole string.
+ *
+ * Either a known prefix with optional separator (`INV-102`, `SO 1187`), or any
+ * short alphabetic prefix followed by a separator and digits (`BILL-4471`).
+ * The separator is required for the general form so an actual business called
+ * something like "Studio 5" is not discarded.
+ */
+const DOC_REF_SHAPE =
+  /^(?:(?:INV|BILL|PO|SO|DO|GRN|CHL|REF)[\s\-_/#.]?\d{1,10}|[A-Za-z]{2,6}[\-_/#.]\d{1,10})$/i;
+
 /** A phone number typed inline. Indian mobiles are ten digits, often with +91. */
 const INLINE_PHONE = /(?:\+?91[\s\-]?)?\b(\d{10})\b|\b(\d{12})\b/;
 
@@ -470,6 +481,12 @@ export function cleanContactName(raw: string | null | undefined): string | null 
   // A single stray letter is never a party. "ji" and "sir" are honorifics that
   // arrive attached to a name and are not part of it.
   if (name.length < 2) return null;
+
+  // Neither is a document reference. "Send a payment reminder to Metro
+  // Logistics for BILL-4471" has TWO candidates after a preposition, and the
+  // LAST one wins — so without this the party came out as "BILL-4471" and the
+  // real party was never resolved.
+  if (DOC_REF_SHAPE.test(name)) return null;
   return name.replace(/\s+(?:ji|sir|madam|bhai|saheb|sahab)$/i, '').trim() || null;
 }
 
@@ -1123,7 +1140,14 @@ function parseOutreach(trimmed: string, taskRef: string | null): ParsedCommand |
   // Checked before the delegated forms: "send a payment reminder to X" also
   // matches the dues vocabulary below, and the direct reading is the one the
   // sender meant when they did not name an employee.
-  if (!employeeName && PAYMENT_REMINDER_DIRECT.test(trimmed)) {
+  // "remind <party> about <money>" — a bare sum with no currency marker and no
+  // "payment"/"invoice" word. The reminder vocabulary alone cannot see it, but
+  // the message is unmistakably about money, so `looksMonetary` supplies the
+  // second half of the signal that `remind` alone is too weak to carry.
+  const remindsAboutMoney = /\bremind(?:er)?\b|\byaad\s*dila/i.test(trimmed)
+    && looksMonetary(trimmed);
+
+  if (!employeeName && (PAYMENT_REMINDER_DIRECT.test(trimmed) || remindsAboutMoney)) {
     const cmd = blank('send_payment_reminder', 'rule', 0.6);
     fillMoneySlots(cmd, trimmed);
     cmd.contactName = cleanContactName(trimmed.match(REMIND_PARTY)?.[1])
